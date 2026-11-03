@@ -1,0 +1,43 @@
+# Python caches and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Packaging and build artifacts
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Local environments
+.venv/
+venv/
+env/
+.env/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Conda local state
+.conda/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Local project data
+*.sqlite3
+*.db
+data/local/
