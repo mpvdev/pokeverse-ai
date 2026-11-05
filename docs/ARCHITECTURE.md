@@ -16,8 +16,8 @@ pokeverse-ai/
 │       ├── repository.py  # SQLite persistence
 │       └── service.py     # Local-first PokemonCatalog
 │   └── llm/
-│       ├── config.py      # LlmSettings (model id, region, temperature, max tokens)
-│       └── bedrock.py     # BedrockChat (Converse API) + LLM error types
+│       ├── config.py      # LlmSettings (model id, temperature, max tokens)
+│       └── openai.py      # OpenAIChat (Responses API) + LLM error types
 └── tests/
     ├── test_cli.py
     └── catalog/
@@ -28,7 +28,7 @@ pokeverse-ai/
         └── test_service.py
     └── llm/
         ├── test_config.py
-        └── test_bedrock.py   # botocore Stubber, no network
+        └── test_openai.py    # injected fake client, no network
 ```
 
 ### Components
@@ -40,14 +40,14 @@ pokeverse-ai/
 | PokéAPI client | `pokeverse.catalog.pokeapi` | Fetches a Pokémon by name/id, maps the payload to `Pokemon`, and translates HTTP/network failures into typed `PokeApiError` subclasses. Import-only; not a runtime dependency. |
 | Repository | `pokeverse.catalog.repository` | `SqlitePokemonRepository`: tables `pokemon` and `pokemon_type` (slot-ordered), schema version in `PRAGMA user_version`, atomic upserts. |
 | Catalog service | `pokeverse.catalog.service` | `PokemonCatalog`: reads locally first; on a miss imports via a `PokemonSource` (e.g. `PokeApiClient`) and stores the result. Raises `PokemonNotInCatalogError` or `UpstreamUnavailableError`; cached data never depends on upstream. |
-| LLM client | `pokeverse.llm` | `BedrockChat.complete()` sends a single-turn Converse request and returns a `Completion` (text, stop reason, token usage, latency). Errors mapped to `LlmAuthError`, `LlmUnavailableError`, `LlmRequestError`. Not yet connected to the catalog. |
+| LLM client | `pokeverse.llm` | `OpenAIChat.complete()` sends a single-turn Responses API request and returns a `Completion` (text, status, token usage, latency). Errors mapped to `LlmAuthError`, `LlmUnavailableError`, `LlmRequestError`. Not yet connected to the catalog. |
 
 ### Runtime
 
 - Python 3.15, packaged with setuptools (`src/` layout).
-- Dependencies managed with uv (`uv.lock`). Runtime: Typer, httpx, boto3.
+- Dependencies managed with uv (`uv.lock`). Runtime: Typer, httpx, OpenAI SDK, python-dotenv.
 - Persistence: local SQLite file, by default `~/.local/share/pokeverse/catalog.db` (outside the repo).
-- LLM inference via Amazon Bedrock (default model `us.amazon.nova-lite-v1:0`, region `us-east-1`); credentials from the standard AWS chain. Network access: PokéAPI client and Bedrock.
+- LLM inference temporarily uses the OpenAI Responses API (default model `gpt-6-luna`, override with `POKEVERSE_MODEL_ID`; `POKEVERSE_REASONING_EFFORT` defaults to `none`, and temperature is only sent when it is `none`); credentials come from `OPENAI_API_KEY`, either exported or read from a git-ignored `.env` in the working directory (exported values win). Network access: PokéAPI client and OpenAI.
 
 ## Target Shape for Phase 1
 

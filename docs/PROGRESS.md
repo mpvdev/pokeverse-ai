@@ -39,11 +39,11 @@ Each step is a small change implemented by the assistant and reviewed by the dev
 
 - [x] Step 4: CLI lookup — `pokeverse pokemon <name|id> [--json] [--offline]`, `pokeverse list [--json]`, `--db` / `POKEVERSE_DB`, distinct exit codes.
 
-- [x] Step 5: first LLM call — `pokeverse.llm` (`BedrockChat` over the Bedrock Converse API, Amazon Nova Lite), `pokeverse ask` with `--system`, `--temperature`, `--max-tokens`, `--usage`.
+- [x] Step 5: first LLM call — `pokeverse.llm` (`OpenAIChat` over the Responses API, GPT-6 Luna), `pokeverse ask` with `--system`, `--temperature`, `--max-tokens`, `--usage`.
 
 ## Next Up
 
-- **Paused:** waiting for Amazon Bedrock access on the new AWS SSO account. Then verify step 5 live (`aws sso login && uv run pytest -m bedrock`).
+- Verify Step 5 live with an OpenAI API key, then proceed to Step 6.
 - Step 6: tool calling (catalog lookup as a tool).
 
 ## Running Locally
@@ -52,10 +52,10 @@ Each step is a small change implemented by the assistant and reviewed by the dev
 uv sync                          # create .venv and install from uv.lock
 uv run pytest                    # offline tests
 uv run pytest -m network         # opt-in live PokéAPI tests
-uv run pytest -m bedrock         # opt-in live Bedrock tests (needs AWS credentials, costs money)
+uv run pytest -m openai         # opt-in live OpenAI test (needs OPENAI_API_KEY, costs money)
 uv run ruff check . && uv run ruff format --check .
 uv run pokeverse --version
 uv run pokeverse pokemon pikachu    # uses ~/.local/share/pokeverse/catalog.db
 uv run pokeverse list
-aws sso login && uv run pokeverse ask "What type is Pikachu?" --usage
+uv run pokeverse ask "What type is Pikachu?" --usage   # needs OPENAI_API_KEY in .env or the environment
 ```

@@ -429,7 +429,7 @@ These are proposed technologies, not immutable decisions.
 - Python 3.15 (intentionally pinned to `>=3.15,<3.16`)
 - uv for dependency management (`uv.lock`, `.python-version`, `[dependency-groups] dev`)
 - httpx for HTTP
-- boto3 / Amazon Bedrock Converse API for LLM inference (default model: Amazon Nova Lite)
+- OpenAI Responses API for temporary LLM inference (default model: GPT-6 Luna); Amazon Bedrock remains the AWS deployment target
 - pytest
 - Python linting and formatting
 - Docker

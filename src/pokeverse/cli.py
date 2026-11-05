@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from dotenv import find_dotenv, load_dotenv
 
 from pokeverse.catalog import (
     Pokemon,
@@ -20,11 +21,11 @@ from pokeverse.catalog import (
 )
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.llm import (
-    BedrockChat,
     LlmAuthError,
     LlmRequestError,
     LlmSettings,
     LlmUnavailableError,
+    OpenAIChat,
 )
 
 EXIT_NOT_FOUND = 1
@@ -165,7 +166,7 @@ def ask_command(
 ) -> None:
     """Ask the LLM a question directly (no tools, no catalog data yet)."""
     try:
-        chat = BedrockChat(LlmSettings.from_env())
+        chat = OpenAIChat(LlmSettings.from_env())
         completion = chat.complete(
             question, system=system or None, temperature=temperature, max_tokens=max_tokens
         )
@@ -189,4 +190,6 @@ def ask_command(
 
 
 def run() -> None:
+    # Real environment variables take precedence over .env values.
+    load_dotenv(find_dotenv(usecwd=True))
     app()

@@ -180,7 +180,7 @@ def test_default_db_path_falls_back_to_home(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 class FakeChat:
-    """Stands in for BedrockChat in CLI tests; records calls, can raise."""
+    """Stands in for OpenAIChat in CLI tests; records calls, can raise."""
 
     calls: list[dict[str, object]] = []
     error: Exception | None = None
@@ -201,7 +201,7 @@ class FakeChat:
 def fake_chat(monkeypatch: pytest.MonkeyPatch) -> type[FakeChat]:
     FakeChat.calls = []
     FakeChat.error = None
-    monkeypatch.setattr(cli, "BedrockChat", FakeChat)
+    monkeypatch.setattr(cli, "OpenAIChat", FakeChat)
     return FakeChat
 
 
@@ -254,7 +254,7 @@ def test_ask_maps_errors_to_exit_codes(fake_chat: type[FakeChat], error: str, co
     from pokeverse.llm import LlmAuthError, LlmRequestError, LlmUnavailableError
 
     fake_chat.error = {
-        "auth": LlmAuthError("expired, try: aws sso login"),
+        "auth": LlmAuthError("invalid API key"),
         "unavailable": LlmUnavailableError("throttled"),
         "request": LlmRequestError("bad model"),
         "value": ValueError("prompt must not be empty"),
