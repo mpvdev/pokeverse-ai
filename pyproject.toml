@@ -9,24 +9,24 @@ description = "A learning-oriented multi-agent AI platform inspired by Pokemon"
 readme = "README.md"
 requires-python = ">=3.15,<3.16"
 dependencies = [
+    "boto3>=1.40",
+    "httpx>=0.28",
     "typer>=0.25.1",
 ]
 
 [project.scripts]
 pokeverse = "pokeverse.cli:run"
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-    "ruff>=0.15.1",
-]
-
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+addopts = "-m 'not network and not bedrock'"
+markers = [
+    "network: tests that call the live PokéAPI (run with: pytest -m network)",
+    "bedrock: tests that call live Amazon Bedrock and cost money (run with: pytest -m bedrock)",
+]
 
 [tool.ruff]
 target-version = "py315"
@@ -34,3 +34,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.15.1",
+]

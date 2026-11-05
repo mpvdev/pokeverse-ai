@@ -5,7 +5,7 @@
 **Project Name:** PokéVerse AI  
 **GitHub Repository:** `mpvdev/pokeverse-ai`  
 **Project Type:** Multi-Agent AI + AWS Portfolio Project  
-**Current Phase:** Phase 0 — Repository Foundation  
+**Current Phase:** Phase 1 — Intelligent Pokédex  
 **Development Approach:** Backend-first, CLI-first, learning-oriented
 
 ### Vision
@@ -29,7 +29,7 @@ The objective is to combine these capabilities into **one interconnected AI ecos
 4. Apply production-grade software engineering and AWS architecture practices.
 5. Understand every major implementation and architectural decision.
 
-**This is primarily a learning project, not a project where the AI assistant should generate the entire application.**
+**This is primarily a learning project: the AI assistant implements in small, explained, reviewable steps, and the developer reviews and understands every change.**
 
 ---
 
@@ -61,34 +61,32 @@ Act as a senior AI engineer, software architect, and technical mentor.
 - Avoid spending excessive time explaining basic Python or AWS concepts.
 - Explain why a technology or design is chosen.
 - Discuss relevant trade-offs and alternatives.
-- Encourage the developer to implement solutions independently.
+- Make the implemented code easy to review and learn from.
 
 ---
 
 ## 3. Core Development Rules
 
-### Rule 1 — Do Not Automatically Implement Features
+### Rule 1 — Assistant Implements, Developer Reviews
 
-The developer wants to write the application code personally.
+The assistant writes the code; the developer reviews it.
 
-Unless explicitly requested:
+Work in small, reviewable increments:
 
-- Do not generate entire features.
-- Do not create or modify source files.
-- Do not automatically implement agent workflows.
-- Do not introduce infrastructure resources.
-- Do not perform large refactoring operations.
+1. Explain the concept and the proposed design, including trade-offs.
+2. Implement one small, well-scoped step (code + tests + doc updates).
+3. Run tests and linting before handing over.
+4. Summarize what changed, key design decisions, and open questions for review.
+4a. Always end with copy-pasteable **"How to test"** scripts (verified to run): automated tests for the step, manual `uv run` scripts exercising the happy path and failure/edge cases, and expected output.
+4b. When the last step of a phase is completed, clearly announce **"Phase N complete"** with a summary of the phase deliverable, an end-to-end test script for the whole phase, and what the next phase covers. Update `docs/PROGRESS.md` and the current phase in this file. I would prefer pushing only at the end of each phase, so suggest a good commit message when `git add` at the end of each phase.
+5. Address review feedback.
 
-Instead:
+Constraints:
 
-1. Explain the concept.
-2. Discuss the design.
-3. Define a small implementation exercise.
-4. Let the developer write the code.
-5. Review the implementation.
-6. Suggest improvements and tests.
-
-Code snippets and pseudocode are acceptable when they help explain a concept.
+- Keep each change small enough to review in one sitting; do not implement a whole phase at once.
+- Ask before introducing new dependencies, infrastructure resources, or large refactors.
+- Record significant design decisions in `CLAUDE.local.md` (local only, git-ignored; never commit or push decisions).
+- **Never run `git add`, `git commit`, or `git push` (or any other command that changes the index, history, or remote).** The developer performs all git operations. Read-only git commands (`status`, `diff`, `log`) are fine.
 
 ### Rule 2 — Backend First
 
@@ -173,7 +171,7 @@ pokeverse-ai/
 ├── docs/
 ├── scripts/
 ├── pyproject.toml
-├── AGENTS.md
+├── CLAUDE.md
 └── README.md
 ```
 
@@ -428,7 +426,10 @@ These are proposed technologies, not immutable decisions.
 ### Engineering Tooling
 
 - Git and GitHub
-- Python dependency management, to be selected
+- Python 3.15 (intentionally pinned to `>=3.15,<3.16`)
+- uv for dependency management (`uv.lock`, `.python-version`, `[dependency-groups] dev`)
+- httpx for HTTP
+- boto3 / Amazon Bedrock Converse API for LLM inference (default model: Amazon Nova Lite)
 - pytest
 - Python linting and formatting
 - Docker
@@ -574,30 +575,23 @@ The completed repository should demonstrate:
 
 ---
 
-## 10. Collaboration Between ChatGPT and Codex
+## 10. AI Assistant Collaboration
 
-### ChatGPT Responsibilities
+The developer uses a single AI assistant: **GitHub Copilot (Claude) in VS Code**, for everything.
 
-ChatGPT is the primary space for:
+### Assistant Responsibilities
 
 - AI concepts and learning.
-- Architecture discussions.
-- Design decisions.
-- Development planning.
+- Architecture discussions, design decisions, and trade-off reviews.
+- Development planning and breaking work into small, reviewable steps.
+- Implementing application code, tests, and documentation.
 - Technical mentorship.
-- Reviewing design trade-offs.
-
-### Codex Responsibilities
-
-Codex is primarily used for:
-
 - Understanding the local repository.
-- Reviewing developer-written code.
-- Identifying bugs.
-- Explaining failures.
+- Reviewing developer-written code, identifying bugs, and explaining failures.
 - Suggesting tests.
-- Reviewing implementation quality.
-- Performing explicitly requested file changes.
+- Performing explicitly requested file changes (documentation, configuration, or code only when asked).
+
+Per Rule 1: the assistant explains, designs, and implements; the developer reviews every change.
 
 ### Shared Context
 
@@ -605,10 +599,11 @@ The GitHub repository is the shared source of truth.
 
 Maintain relevant information in:
 
-- `AGENTS.md` — Development guidance and project context.
+- `CLAUDE.md` — Development guidance and project context.
 - `docs/ARCHITECTURE.md` — Current technical architecture.
-- `docs/DECISIONS.md` — Architecture decisions and rationale.
 - `docs/PROGRESS.md` — Completed work, current phase, and next steps.
+
+Architecture decisions are kept only in `CLAUDE.local.md`, which is git-ignored and must never be committed or pushed.
 
 Keep documentation aligned with actual implementation.
 
@@ -629,29 +624,29 @@ The following decisions have already been made:
 - Data resilience: Core functionality must survive upstream API outages.
 - Agent architecture: Proposed 16 agents, introduced progressively.
 - AWS: Introduced incrementally.
-- Developer writes the implementation code.
-- ChatGPT provides architecture and learning mentorship.
-- Codex supports development, reviews, debugging, and explicitly requested changes.
+- Python version: 3.15 only (`>=3.15,<3.16`), intentionally.
+- Assistant writes the implementation code; developer reviews it.
+- GitHub Copilot (Claude) in VS Code provides mentorship, architecture guidance, reviews, debugging, and explicitly requested changes.
 
-**Current development phase: Phase 0 — Repository Foundation.**
+**Current development phase: Phase 1 — Intelligent Pokédex** (branch `phase-1`).
 
-No application implementation has been confirmed yet.
+Phase 0 (Repository Foundation) is complete:
+
+- `src/` layout package `pokeverse` built with setuptools via `pyproject.toml`.
+- Typer CLI (`pokeverse` / `python -m pokeverse`) with a welcome message and `--version`.
+- Immutable, validated `Pokemon` domain model in `pokeverse.catalog`.
+- pytest test suite and ruff linting/formatting conventions.
+
+See `docs/PROGRESS.md` for detailed progress and next steps.
 
 ---
 
 ## 12. Immediate Next Steps
 
-Before implementing features:
+1. Build the deterministic PokéAPI client and local catalog before introducing any LLM.
+2. Introduce LLM inference, then tool calling, then structured outputs — one step at a time.
 
-1. Inspect the existing local repository.
-2. Identify the current files and Git status.
-3. Review this project context.
-4. Discuss Python dependency management options.
-5. Propose a minimal initial package structure.
-6. Establish testing and linting conventions.
-7. Agree on a small first implementation exercise.
-
-**Do not begin implementing Phase 1 or creating the full directory structure automatically.**
+Implement Phase 1 one step at a time (see `docs/PROGRESS.md`), handing each step to the developer for review before starting the next.
 
 Wait for explicit instructions from the developer.
 

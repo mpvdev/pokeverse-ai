@@ -41,3 +41,6 @@ env/
 *.sqlite3
 *.db
 data/local/
+
+# Local-only AI assistant context (decision log)
+CLAUDE.local.md
