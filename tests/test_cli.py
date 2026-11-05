@@ -1,6 +1,7 @@
 import json
 from importlib.metadata import version
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -180,7 +181,7 @@ def test_default_db_path_falls_back_to_home(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 class FakeChat:
-    """Stands in for OpenAIChat in CLI tests; records calls, can raise."""
+    """Stands in for OpenAIChat in CLI tests; records calls, runs tools, can raise."""
 
     calls: list[dict[str, object]] = []
     error: Exception | None = None
@@ -188,20 +189,29 @@ class FakeChat:
     def __init__(self, settings: object = None) -> None:
         pass
 
-    def complete(self, prompt: str, **kwargs: object):
-        from pokeverse.llm import Completion
+    def complete(self, prompt: str, **kwargs: Any):
+        from pokeverse.llm import Completion, ToolCall
 
         FakeChat.calls.append({"prompt": prompt, **kwargs})
         if FakeChat.error is not None:
             raise FakeChat.error
-        return Completion("Pikachu is Electric-type.", "fake-model", "end_turn", 10, 5, 42)
+        tool_calls = tuple(
+            ToolCall(tool.name, {"name_or_id": "Pikachu"}, tool.handler(name_or_id="Pikachu"))
+            for tool in kwargs.get("tools", ())
+        )
+        return Completion(
+            "Pikachu is Electric-type.", "fake-model", "end_turn", 10, 5, 42, tool_calls
+        )
 
 
 @pytest.fixture
-def fake_chat(monkeypatch: pytest.MonkeyPatch) -> type[FakeChat]:
+def fake_chat(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, upstream: Upstream
+) -> type[FakeChat]:
     FakeChat.calls = []
     FakeChat.error = None
     monkeypatch.setattr(cli, "OpenAIChat", FakeChat)
+    monkeypatch.setenv("POKEVERSE_DB", str(tmp_path / "ask.db"))
     return FakeChat
 
 
@@ -232,6 +242,24 @@ def test_ask_usage_goes_to_stderr(fake_chat: type[FakeChat]) -> None:
     assert result.stdout == "Pikachu is Electric-type.\n"
     assert "tokens in=10 out=5 total=15" in result.stderr
     assert "latency=42ms" in result.stderr
+
+
+def test_ask_gives_model_the_catalog_tool(fake_chat: type[FakeChat], upstream: Upstream) -> None:
+    result = runner.invoke(app, ["ask", "What type is Pikachu?", "--usage"])
+
+    assert result.exit_code == 0
+    (tool,) = fake_chat.calls[0]["tools"]  # type: ignore[misc]
+    assert tool.name == "get_pokemon"
+    assert upstream.requests == ["/api/v2/pokemon/pikachu"]
+    assert '[tool] get_pokemon({"name_or_id": "Pikachu"}) -> {"pokedex_id": 25' in result.stderr
+
+
+def test_ask_without_tools(fake_chat: type[FakeChat], upstream: Upstream) -> None:
+    result = runner.invoke(app, ["ask", "hi", "--no-tools"])
+
+    assert result.exit_code == 0
+    assert fake_chat.calls[0]["tools"] == ()
+    assert upstream.requests == []
 
 
 def test_ask_rejects_out_of_range_temperature(fake_chat: type[FakeChat]) -> None:

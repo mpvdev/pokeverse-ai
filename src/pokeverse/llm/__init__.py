@@ -9,6 +9,7 @@ from pokeverse.llm.openai import (
     LlmUnavailableError,
     OpenAIChat,
 )
+from pokeverse.llm.tools import Tool, ToolCall
 
 __all__ = [
     "Completion",
@@ -18,4 +19,6 @@ __all__ = [
     "LlmSettings",
     "LlmUnavailableError",
     "OpenAIChat",
+    "Tool",
+    "ToolCall",
 ]

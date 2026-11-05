@@ -3,7 +3,7 @@
 import json
 import os
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
@@ -12,6 +12,7 @@ from typing import Annotated
 import typer
 from dotenv import find_dotenv, load_dotenv
 
+from pokeverse.agents import make_catalog_tools
 from pokeverse.catalog import (
     Pokemon,
     PokemonCatalog,
@@ -149,6 +150,7 @@ def list_command(
 
 @app.command("ask")
 def ask_command(
+    ctx: typer.Context,
     question: Annotated[str, typer.Argument(help="Question or prompt for the model.")],
     system: Annotated[
         str, typer.Option("--system", help="System prompt (sets the model's role and rules).")
@@ -163,13 +165,27 @@ def ask_command(
     show_usage: Annotated[
         bool, typer.Option("--usage", help="Print model, token usage and latency to stderr.")
     ] = False,
+    use_tools: Annotated[
+        bool,
+        typer.Option("--tools/--no-tools", help="Let the model look up Pokémon in the catalog."),
+    ] = True,
 ) -> None:
-    """Ask the LLM a question directly (no tools, no catalog data yet)."""
+    """Ask the LLM a question, letting it look up Pokémon in the local catalog."""
+    settings: Settings = ctx.obj
     try:
         chat = OpenAIChat(LlmSettings.from_env())
-        completion = chat.complete(
-            question, system=system or None, temperature=temperature, max_tokens=max_tokens
-        )
+        with ExitStack() as stack:
+            tools = ()
+            if use_tools:
+                catalog = stack.enter_context(open_catalog(settings, offline=False))
+                tools = make_catalog_tools(catalog)
+            completion = chat.complete(
+                question,
+                system=system or None,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+            )
     except ValueError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
     except LlmAuthError as error:
@@ -181,6 +197,11 @@ def ask_command(
 
     typer.echo(completion.text)
     if show_usage:
+        for call in completion.tool_calls:
+            typer.echo(
+                f"[tool] {call.name}({json.dumps(call.arguments)}) -> {json.dumps(call.output)}",
+                err=True,
+            )
         typer.echo(
             f"[{completion.model_id}] tokens in={completion.input_tokens} "
             f"out={completion.output_tokens} total={completion.total_tokens} "

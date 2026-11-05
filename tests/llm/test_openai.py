@@ -12,23 +12,36 @@ from pokeverse.llm import (
     LlmSettings,
     LlmUnavailableError,
     OpenAIChat,
+    Tool,
+    ToolCall,
 )
 
 SETTINGS = LlmSettings(model_id="test-model", temperature=0.3, max_tokens=64)
 
 
-def openai_response(text: str = "Pikachu is Electric-type.") -> SimpleNamespace:
+def openai_response(
+    text: str = "Pikachu is Electric-type.",
+    output: list[Any] | None = None,
+    usage: tuple[int, int] = (12, 7),
+) -> SimpleNamespace:
     return SimpleNamespace(
         output_text=text,
+        output=output or [],
         model="test-model",
         status="completed",
-        usage=SimpleNamespace(input_tokens=12, output_tokens=7),
+        usage=SimpleNamespace(input_tokens=usage[0], output_tokens=usage[1]),
     )
 
 
+def function_call(
+    arguments: str = '{"name_or_id": "pikachu"}', name: str = "get_pokemon", call_id: str = "c1"
+) -> SimpleNamespace:
+    return SimpleNamespace(type="function_call", call_id=call_id, name=name, arguments=arguments)
+
+
 class FakeResponses:
-    def __init__(self, response: Any = None, error: Exception | None = None) -> None:
-        self.response = response
+    def __init__(self, responses: list[Any], error: Exception | None = None) -> None:
+        self.responses = responses
         self.error = error
         self.requests: list[dict[str, Any]] = []
 
@@ -36,12 +49,12 @@ class FakeResponses:
         self.requests.append(request)
         if self.error is not None:
             raise self.error
-        return self.response
+        return self.responses.pop(0)
 
 
 class FakeClient:
-    def __init__(self, response: Any = None, error: Exception | None = None) -> None:
-        self.responses = FakeResponses(response, error)
+    def __init__(self, *responses: Any, error: Exception | None = None) -> None:
+        self.responses = FakeResponses(list(responses), error)
 
 
 def test_complete_returns_text_and_usage() -> None:
@@ -141,6 +154,92 @@ def test_malformed_response_raises_request_error() -> None:
         chat.complete("hi")
 
 
+PIKACHU = {"pokedex_id": 25, "name": "pikachu", "types": ["electric"]}
+
+
+def pokemon_tool(calls: list[str] | None = None) -> Tool:
+    def get_pokemon(name_or_id: str) -> dict[str, Any]:
+        if calls is not None:
+            calls.append(name_or_id)
+        return PIKACHU
+
+    return Tool(
+        name="get_pokemon",
+        description="Look up a Pokémon.",
+        parameters={
+            "type": "object",
+            "properties": {"name_or_id": {"type": "string"}},
+            "required": ["name_or_id"],
+            "additionalProperties": False,
+        },
+        handler=get_pokemon,
+    )
+
+
+def test_tool_call_round_trip() -> None:
+    reasoning = SimpleNamespace(type="reasoning", id="rs_1")
+    call = function_call()
+    client = FakeClient(
+        openai_response("", output=[reasoning, call], usage=(10, 5)),
+        openai_response("Pikachu is Electric-type.", usage=(20, 7)),
+    )
+    handled: list[str] = []
+    chat = OpenAIChat(SETTINGS, client=client)
+
+    completion = chat.complete("What type is Pikachu?", tools=[pokemon_tool(handled)])
+
+    assert completion.text == "Pikachu is Electric-type."
+    assert (completion.input_tokens, completion.output_tokens) == (30, 12)
+    assert completion.tool_calls == (ToolCall("get_pokemon", {"name_or_id": "pikachu"}, PIKACHU),)
+    assert handled == ["pikachu"]
+
+    first, second = client.responses.requests
+    assert first["tools"][0]["name"] == "get_pokemon"
+    assert first["tools"][0]["strict"] is True
+    assert first["input"] == [{"role": "user", "content": "What type is Pikachu?"}]
+    assert second["input"] == [
+        {"role": "user", "content": "What type is Pikachu?"},
+        reasoning,
+        call,
+        {
+            "type": "function_call_output",
+            "call_id": "c1",
+            "output": '{"pokedex_id": 25, "name": "pikachu", "types": ["electric"]}',
+        },
+    ]
+
+
+def test_unknown_tool_returns_error_to_model() -> None:
+    client = FakeClient(
+        openai_response("", output=[function_call(name="get_weather", arguments="{}")]),
+        openai_response("I can only look up Pokémon."),
+    )
+    chat = OpenAIChat(SETTINGS, client=client)
+
+    completion = chat.complete("Weather?", tools=[pokemon_tool()])
+
+    assert completion.tool_calls[0].output["error"] == "unknown_tool"
+    assert "unknown_tool" in client.responses.requests[1]["input"][-1]["output"]
+
+
+def test_tool_loop_is_bounded() -> None:
+    client = FakeClient(*[openai_response("", output=[function_call()]) for _ in range(3)])
+    chat = OpenAIChat(SETTINGS, client=client)
+
+    with pytest.raises(LlmRequestError, match="2 rounds"):
+        chat.complete("Loop forever", tools=[pokemon_tool()], max_tool_rounds=2)
+
+    assert len(client.responses.requests) == 3
+
+
+def test_invalid_tool_arguments_raise_request_error() -> None:
+    client = FakeClient(openai_response("", output=[function_call(arguments="{not json")]))
+    chat = OpenAIChat(SETTINGS, client=client)
+
+    with pytest.raises(LlmRequestError, match="invalid JSON"):
+        chat.complete("What type is Pikachu?", tools=[pokemon_tool()])
+
+
 @pytest.mark.openai
 def test_live_openai_completion() -> None:
     load_dotenv(find_dotenv(usecwd=True))
@@ -151,3 +250,16 @@ def test_live_openai_completion() -> None:
     assert "pong" in completion.text.lower()
     assert completion.input_tokens > 0
     assert completion.output_tokens > 0
+
+
+@pytest.mark.openai
+def test_live_openai_tool_call() -> None:
+    load_dotenv(find_dotenv(usecwd=True))
+    handled: list[str] = []
+    completion = OpenAIChat(LlmSettings.from_env()).complete(
+        "What is Pikachu's National Pokédex number?", tools=[pokemon_tool(handled)]
+    )
+
+    assert handled
+    assert completion.tool_calls[0].name == "get_pokemon"
+    assert "25" in completion.text

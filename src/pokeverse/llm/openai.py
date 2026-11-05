@@ -1,7 +1,9 @@
 """Minimal OpenAI chat client built on the Responses API."""
 
+import json
 import os
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -17,6 +19,9 @@ from openai import (
 )
 
 from pokeverse.llm.config import LlmSettings
+from pokeverse.llm.tools import Tool, ToolCall
+
+DEFAULT_MAX_TOOL_ROUNDS = 5
 
 
 class LlmError(Exception):
@@ -45,6 +50,7 @@ class Completion:
     input_tokens: int
     output_tokens: int
     latency_ms: int
+    tool_calls: tuple[ToolCall, ...] = ()
 
     @property
     def total_tokens(self) -> int:
@@ -52,7 +58,7 @@ class Completion:
 
 
 class OpenAIChat:
-    """Single-turn text completion via the OpenAI Responses API.
+    """Text completion via the OpenAI Responses API, with optional tool calling.
 
     Pass ``client`` to inject a preconfigured or fake OpenAI client in tests.
     """
@@ -74,7 +80,10 @@ class OpenAIChat:
         system: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        tools: Sequence[Tool] = (),
+        max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
     ) -> Completion:
+        """Answer ``prompt``, running any requested ``tools`` until the model replies in text."""
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
         settings = replace(
@@ -93,11 +102,45 @@ class OpenAIChat:
             request["temperature"] = settings.temperature
         if system:
             request["instructions"] = system
+        if tools:
+            request["tools"] = [_tool_schema(tool) for tool in tools]
 
+        tools_by_name = {tool.name: tool for tool in tools}
+        conversation: list[Any] = [{"role": "user", "content": prompt}]
+        tool_calls: list[ToolCall] = []
+        input_tokens = output_tokens = 0
         started = time.perf_counter()
-        response = self._call(request)
-        latency_ms = round((time.perf_counter() - started) * 1000)
-        return _parse_response(response, latency_ms)
+
+        for _ in range(max_tool_rounds + 1):
+            response = self._call({**request, "input": list(conversation) if tools else prompt})
+            round_input, round_output = _usage(response)
+            input_tokens += round_input
+            output_tokens += round_output
+
+            function_calls = _function_calls(response) if tools else []
+            if not function_calls:
+                return _completion(
+                    response,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    latency_ms=round((time.perf_counter() - started) * 1000),
+                    tool_calls=tuple(tool_calls),
+                )
+
+            # Reasoning items must be sent back together with the tool results.
+            conversation += response.output
+            for item in function_calls:
+                call = _run_tool(tools_by_name, item)
+                tool_calls.append(call)
+                conversation.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": item.call_id,
+                        "output": json.dumps(call.output),
+                    }
+                )
+
+        raise LlmRequestError(f"Model still requesting tools after {max_tool_rounds} rounds")
 
     def _call(self, request: dict[str, Any]) -> Any:
         try:
@@ -114,18 +157,63 @@ class OpenAIChat:
             raise LlmRequestError(str(error)) from error
 
 
-def _parse_response(response: Any, latency_ms: int) -> Completion:
+def _tool_schema(tool: Tool) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": dict(tool.parameters),
+        "strict": True,
+    }
+
+
+def _function_calls(response: Any) -> list[Any]:
+    try:
+        return [item for item in response.output if item.type == "function_call"]
+    except (AttributeError, TypeError) as error:
+        raise LlmRequestError(f"Malformed OpenAI response: {error}") from error
+
+
+def _run_tool(tools: Mapping[str, Tool], item: Any) -> ToolCall:
+    try:
+        arguments = json.loads(item.arguments)
+    except json.JSONDecodeError as error:
+        raise LlmRequestError(f"Model sent invalid JSON arguments to {item.name!r}") from error
+    tool = tools.get(item.name)
+    if tool is None:
+        output = {"error": "unknown_tool", "message": f"No tool named {item.name!r}"}
+    else:
+        output = tool.handler(**arguments)
+    return ToolCall(name=item.name, arguments=arguments, output=output)
+
+
+def _usage(response: Any) -> tuple[int, int]:
     try:
         usage = response.usage
         if usage is None:
             raise TypeError("usage is null")
+        return usage.input_tokens, usage.output_tokens
+    except (AttributeError, TypeError) as error:
+        raise LlmRequestError(f"Malformed OpenAI response: {error}") from error
+
+
+def _completion(
+    response: Any,
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    latency_ms: int,
+    tool_calls: tuple[ToolCall, ...],
+) -> Completion:
+    try:
         return Completion(
             text=response.output_text,
             model_id=response.model,
             stop_reason=response.status,
-            input_tokens=usage.input_tokens,
-            output_tokens=usage.output_tokens,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             latency_ms=latency_ms,
+            tool_calls=tool_calls,
         )
-    except (AttributeError, TypeError) as error:
+    except AttributeError as error:
         raise LlmRequestError(f"Malformed OpenAI response: {error}") from error
