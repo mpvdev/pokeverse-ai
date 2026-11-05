@@ -12,6 +12,7 @@ from pokeverse.agents import POKEDEX_ANSWER_SCHEMA
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.cli import (
     EXIT_AUTH,
+    EXIT_EVAL_FAILED,
     EXIT_INVALID_INPUT,
     EXIT_NOT_FOUND,
     EXIT_UPSTREAM_UNAVAILABLE,
@@ -322,3 +323,60 @@ def test_ask_maps_errors_to_exit_codes(fake_chat: type[FakeChat], error: str, co
     assert result.exit_code == code
     assert result.stdout == ""
     assert result.stderr.startswith("Error:")
+
+
+PIKACHU_ANSWER = {
+    "answer": "Pikachu is Electric-type.",
+    "pokemon": ["pikachu"],
+    "confidence": "high",
+}
+
+
+def test_research_prints_grounded_answer(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = PIKACHU_ANSWER
+
+    result = runner.invoke(app, ["research", "What type is Pikachu?"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "Pikachu is Electric-type.\n"
+    assert "confidence: high" in result.stderr
+    assert "Warning" not in result.stderr
+    assert fake_chat.calls[0]["output_schema"] is POKEDEX_ANSWER_SCHEMA
+
+
+def test_research_json_flags_ungrounded_pokemon(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = {**PIKACHU_ANSWER, "pokemon": ["pikachu", "raichu"]}
+
+    result = runner.invoke(app, ["research", "Pikachu vs Raichu?", "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["ungrounded"] == ["raichu"]
+    assert "not verified against the catalog: raichu" in result.stderr
+
+
+def test_eval_passing_case(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = PIKACHU_ANSWER
+
+    result = runner.invoke(app, ["eval", "--case", "pikachu-type"])
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith("PASS pikachu-type")
+    assert "1/1 passed | tool use correct 1/1" in result.stdout
+
+
+def test_eval_failing_case_exits_nonzero(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = PIKACHU_ANSWER
+
+    result = runner.invoke(app, ["eval", "--case", "off-topic"])
+
+    assert result.exit_code == EXIT_EVAL_FAILED
+    assert "FAIL off-topic" in result.stdout
+    assert "expected lookup=False" in result.stdout
+
+
+def test_eval_rejects_unknown_case(fake_chat: type[FakeChat]) -> None:
+    result = runner.invoke(app, ["eval", "--case", "nope"])
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "unknown case" in result.stderr
+    assert fake_chat.calls == []

@@ -2,9 +2,13 @@
 
 ## Current Phase
 
-**Phase 1 — Intelligent Pokédex** (branch `phase-1`)
+**Phase 2 — Multi-Agent Trainer System** (not started). Phase 1 is complete on branch `phase-1`.
 
 ## Completed
+
+### Phase 1 — Intelligent Pokédex (branch `phase-1`)
+
+Deliverable: a CLI-based intelligent Pokédex. `pokeverse research` answers Pokémon questions with a tool-using, structured-output agent grounded in a local, outage-tolerant catalog; `pokeverse eval` measures it.
 
 ### Phase 0 — Repository Foundation (merged in #1)
 
@@ -45,9 +49,12 @@ Each step is a small change implemented by the assistant and reviewed by the dev
 
 - [x] Step 7: structured outputs — provider-neutral `OutputSchema`, strict `text.format` JSON Schema in `OpenAIChat` (parsed into `Completion.data`; truncation and refusals raise `LlmRequestError`), self-validating `PokedexAnswer` (`answer`, `pokemon` slugs, `confidence`), `pokeverse ask --json`. Verified live.
 
+- [x] Step 8: Pokémon Research Agent — `ResearchAgent` (fixed system prompt + catalog tool + `PokedexAnswer` schema) returning a `ResearchResult` with a deterministic grounding check (claimed Pokémon must appear in a successful tool result); `pokeverse.evals` with 7 cases and deterministic checks (expected Pokémon, required facts, tool use, grounding, confidence); `pokeverse research [--json] [--usage]` and `pokeverse eval [--case ID]` (exit 5 on failures). Live baseline on `gpt-5.6-terra`, effort `low`: 7/7 passed, tool use 7/7, 5,692 tokens, ~4.0 s average latency.
+
 ## Next Up
 
-- Step 8: Pokémon Research Agent — combine tools and structured outputs into the first agent; add basic evaluation cases.
+- Phase 2 — Multi-Agent Trainer System: Supervisor Agent, specialized agents, delegation, shared context, multi- vs single-agent evaluation.
+- Known gap found by the live run: the agent answers type-effectiveness questions from memory and got one wrong (said Ghost/Poison Gengar is not weak to Psychic). Type effectiveness should be a deterministic catalog tool, not LLM recall; add an eval case for it.
 
 ## Running Locally
 
@@ -63,4 +70,6 @@ uv run pokeverse list
 uv run pokeverse ask "What type is Pikachu?" --usage   # needs OPENAI_API_KEY in .env or the environment
 uv run pokeverse ask "What type is Pikachu?" --no-tools --usage   # model answers from memory only
 uv run pokeverse ask "What type is Pikachu?" --json              # validated structured answer
+uv run pokeverse research "What type is Mr. Mime?" --usage       # Research Agent
+uv run pokeverse eval                                            # evaluation suite (live, costs tokens)
 ```

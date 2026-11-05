@@ -12,7 +12,12 @@ from typing import Annotated
 import typer
 from dotenv import find_dotenv, load_dotenv
 
-from pokeverse.agents import POKEDEX_ANSWER_SCHEMA, PokedexAnswer, make_catalog_tools
+from pokeverse.agents import (
+    POKEDEX_ANSWER_SCHEMA,
+    PokedexAnswer,
+    ResearchAgent,
+    make_catalog_tools,
+)
 from pokeverse.catalog import (
     Pokemon,
     PokemonCatalog,
@@ -21,7 +26,9 @@ from pokeverse.catalog import (
     UpstreamUnavailableError,
 )
 from pokeverse.catalog.pokeapi import PokeApiClient
+from pokeverse.evals import RESEARCH_CASES, EvalResult, run_case
 from pokeverse.llm import (
+    Completion,
     LlmAuthError,
     LlmRequestError,
     LlmSettings,
@@ -33,6 +40,7 @@ EXIT_NOT_FOUND = 1
 EXIT_INVALID_INPUT = 2
 EXIT_UPSTREAM_UNAVAILABLE = 3
 EXIT_AUTH = 4
+EXIT_EVAL_FAILED = 5
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are the PokéVerse AI assistant, an expert on Pokémon games and battle mechanics. "
@@ -175,7 +183,7 @@ def ask_command(
 ) -> None:
     """Ask the LLM a question, letting it look up Pokémon in the local catalog."""
     settings: Settings = ctx.obj
-    try:
+    with llm_errors():
         chat = OpenAIChat(LlmSettings.from_env())
         with ExitStack() as stack:
             tools = ()
@@ -195,6 +203,17 @@ def ask_command(
                 answer = PokedexAnswer.from_dict(completion.data or {})
             except ValueError as error:
                 raise LlmRequestError(f"Model reply failed validation: {error}") from error
+
+    typer.echo(json.dumps(answer.to_dict()) if as_json else completion.text)
+    if show_usage:
+        print_usage(completion)
+
+
+@contextmanager
+def llm_errors() -> Iterator[None]:
+    """Map LLM and input errors to exit codes, with the message on stderr."""
+    try:
+        yield
     except ValueError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
     except LlmAuthError as error:
@@ -204,19 +223,93 @@ def ask_command(
     except LlmRequestError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
 
-    typer.echo(json.dumps(answer.to_dict()) if as_json else completion.text)
-    if show_usage:
-        for call in completion.tool_calls:
-            typer.echo(
-                f"[tool] {call.name}({json.dumps(call.arguments)}) -> {json.dumps(call.output)}",
-                err=True,
-            )
+
+def print_usage(completion: Completion) -> None:
+    for call in completion.tool_calls:
         typer.echo(
-            f"[{completion.model_id}] tokens in={completion.input_tokens} "
-            f"out={completion.output_tokens} total={completion.total_tokens} "
-            f"stop={completion.stop_reason} latency={completion.latency_ms}ms",
+            f"[tool] {call.name}({json.dumps(call.arguments)}) -> {json.dumps(call.output)}",
             err=True,
         )
+    typer.echo(
+        f"[{completion.model_id}] tokens in={completion.input_tokens} "
+        f"out={completion.output_tokens} total={completion.total_tokens} "
+        f"stop={completion.stop_reason} latency={completion.latency_ms}ms",
+        err=True,
+    )
+
+
+@app.command("research")
+def research_command(
+    ctx: typer.Context,
+    question: Annotated[str, typer.Argument(help="Question about one or more Pokémon.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print the result as JSON.")] = False,
+    show_usage: Annotated[
+        bool, typer.Option("--usage", help="Print tool calls and token usage to stderr.")
+    ] = False,
+) -> None:
+    """Ask the Pokémon Research Agent; answers are grounded in the local catalog."""
+    settings: Settings = ctx.obj
+    with llm_errors():
+        chat = OpenAIChat(LlmSettings.from_env())
+        with open_catalog(settings, offline=False) as catalog:
+            result = ResearchAgent(chat, catalog).ask(question)
+
+    if as_json:
+        typer.echo(json.dumps(result.to_dict()))
+    else:
+        typer.echo(result.answer.answer)
+        typer.echo(f"(confidence: {result.answer.confidence})", err=True)
+    if result.ungrounded:
+        typer.echo(
+            f"Warning: not verified against the catalog: {', '.join(result.ungrounded)}",
+            err=True,
+        )
+    if show_usage:
+        print_usage(result.completion)
+
+
+@app.command("eval")
+def eval_command(
+    ctx: typer.Context,
+    case_ids: Annotated[
+        list[str] | None,
+        typer.Option("--case", help="Run only this case id (repeatable)."),
+    ] = None,
+) -> None:
+    """Run the Research Agent evaluation suite (live model calls; costs tokens)."""
+    settings: Settings = ctx.obj
+    cases = RESEARCH_CASES
+    if case_ids:
+        known = {case.id: case for case in RESEARCH_CASES}
+        unknown = [case_id for case_id in case_ids if case_id not in known]
+        if unknown:
+            raise fail(f"unknown case(s) {unknown}; known: {sorted(known)}", EXIT_INVALID_INPUT)
+        cases = tuple(known[case_id] for case_id in case_ids)
+
+    results: list[EvalResult] = []
+    with llm_errors():
+        chat = OpenAIChat(LlmSettings.from_env())
+        with open_catalog(settings, offline=False) as catalog:
+            agent = ResearchAgent(chat, catalog)
+            for case in cases:
+                outcome = run_case(agent, case)
+                results.append(outcome)
+                tokens = outcome.result.completion.total_tokens if outcome.result else 0
+                status = "PASS" if outcome.passed else "FAIL"
+                typer.echo(f"{status} {case.id:<16} {outcome.latency_ms:>6}ms {tokens:>5} tok")
+                for failure in outcome.failures:
+                    typer.echo(f"     - {failure}")
+
+    passed = sum(outcome.passed for outcome in results)
+    tool_ok = sum(outcome.tool_use_correct for outcome in results)
+    tokens = sum(o.result.completion.total_tokens for o in results if o.result is not None)
+    latency = sum(outcome.latency_ms for outcome in results) // len(results)
+    typer.echo(
+        f"\n{passed}/{len(results)} passed | tool use correct {tool_ok}/{len(results)} | "
+        f"{tokens} tokens | avg latency {latency}ms"
+    )
+    if passed != len(results):
+        raise typer.Exit(EXIT_EVAL_FAILED)
 
 
 def run() -> None:

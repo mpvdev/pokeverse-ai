@@ -5,7 +5,7 @@
 **Project Name:** PokéVerse AI  
 **GitHub Repository:** `mpvdev/pokeverse-ai`  
 **Project Type:** Multi-Agent AI + AWS Portfolio Project  
-**Current Phase:** Phase 1 — Intelligent Pokédex  
+**Current Phase:** Phase 2 — Multi-Agent Trainer System (not started; Phase 1 complete)  
 **Development Approach:** Backend-first, CLI-first, learning-oriented
 
 ### Vision
@@ -628,7 +628,13 @@ The following decisions have already been made:
 - Assistant writes the implementation code; developer reviews it.
 - GitHub Copilot (Claude) in VS Code provides mentorship, architecture guidance, reviews, debugging, and explicitly requested changes.
 
-**Current development phase: Phase 1 — Intelligent Pokédex** (branch `phase-1`).
+**Current development phase: Phase 2 — Multi-Agent Trainer System** (not started).
+
+Phase 1 (Intelligent Pokédex) is complete on branch `phase-1`:
+
+- PokéAPI client and local-first SQLite catalog that survives upstream outages.
+- OpenAI Responses API client (temporary; Bedrock remains the AWS target) with tool calling and structured outputs.
+- Pokémon Research Agent (`pokeverse research`) with a deterministic grounding check, and an evaluation suite (`pokeverse eval`).
 
 Phase 0 (Repository Foundation) is complete:
 
@@ -643,10 +649,10 @@ See `docs/PROGRESS.md` for detailed progress and next steps.
 
 ## 12. Immediate Next Steps
 
-1. Build the deterministic PokéAPI client and local catalog before introducing any LLM.
-2. Introduce LLM inference, then tool calling, then structured outputs — one step at a time.
+1. Make type effectiveness a deterministic tool (the live eval run showed the agent getting it wrong from memory).
+2. Plan Phase 2 — Supervisor Agent and delegation — one step at a time.
 
-Implement Phase 1 one step at a time (see `docs/PROGRESS.md`), handing each step to the developer for review before starting the next.
+Implement Phase 2 one step at a time (see `docs/PROGRESS.md`), handing each step to the developer for review before starting the next.
 
 Wait for explicit instructions from the developer.
 
