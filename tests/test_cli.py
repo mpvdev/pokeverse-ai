@@ -8,6 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from pokeverse import cli
+from pokeverse.agents import POKEDEX_ANSWER_SCHEMA
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.cli import (
     EXIT_AUTH,
@@ -185,6 +186,7 @@ class FakeChat:
 
     calls: list[dict[str, object]] = []
     error: Exception | None = None
+    data: dict[str, Any] | None = None
 
     def __init__(self, settings: object = None) -> None:
         pass
@@ -199,8 +201,9 @@ class FakeChat:
             ToolCall(tool.name, {"name_or_id": "Pikachu"}, tool.handler(name_or_id="Pikachu"))
             for tool in kwargs.get("tools", ())
         )
+        data = FakeChat.data if kwargs.get("output_schema") else None
         return Completion(
-            "Pikachu is Electric-type.", "fake-model", "end_turn", 10, 5, 42, tool_calls
+            "Pikachu is Electric-type.", "fake-model", "end_turn", 10, 5, 42, tool_calls, data
         )
 
 
@@ -210,6 +213,7 @@ def fake_chat(
 ) -> type[FakeChat]:
     FakeChat.calls = []
     FakeChat.error = None
+    FakeChat.data = None
     monkeypatch.setattr(cli, "OpenAIChat", FakeChat)
     monkeypatch.setenv("POKEVERSE_DB", str(tmp_path / "ask.db"))
     return FakeChat
@@ -224,6 +228,31 @@ def test_ask_prints_answer(fake_chat: type[FakeChat]) -> None:
     (call,) = fake_chat.calls
     assert call["prompt"] == "What type is Pikachu?"
     assert call["system"] == cli.DEFAULT_SYSTEM_PROMPT
+    assert call["output_schema"] is None
+
+
+def test_ask_json_prints_validated_answer(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = {
+        "answer": "Pikachu is Electric-type.",
+        "pokemon": ["pikachu"],
+        "confidence": "high",
+    }
+
+    result = runner.invoke(app, ["ask", "What type is Pikachu?", "--json"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == fake_chat.data
+    assert fake_chat.calls[0]["output_schema"] is POKEDEX_ANSWER_SCHEMA
+
+
+def test_ask_json_rejects_invalid_model_reply(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = {"answer": "Electric.", "pokemon": ["Pikachu"], "confidence": "high"}
+
+    result = runner.invoke(app, ["ask", "What type is Pikachu?", "--json"])
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert result.stdout == ""
+    assert "failed validation" in result.stderr
 
 
 def test_ask_passes_options(fake_chat: type[FakeChat]) -> None:

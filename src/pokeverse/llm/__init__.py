@@ -9,6 +9,7 @@ from pokeverse.llm.openai import (
     LlmUnavailableError,
     OpenAIChat,
 )
+from pokeverse.llm.structured import OutputSchema
 from pokeverse.llm.tools import Tool, ToolCall
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "LlmSettings",
     "LlmUnavailableError",
     "OpenAIChat",
+    "OutputSchema",
     "Tool",
     "ToolCall",
 ]

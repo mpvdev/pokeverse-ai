@@ -12,7 +12,7 @@ from typing import Annotated
 import typer
 from dotenv import find_dotenv, load_dotenv
 
-from pokeverse.agents import make_catalog_tools
+from pokeverse.agents import POKEDEX_ANSWER_SCHEMA, PokedexAnswer, make_catalog_tools
 from pokeverse.catalog import (
     Pokemon,
     PokemonCatalog,
@@ -169,6 +169,9 @@ def ask_command(
         bool,
         typer.Option("--tools/--no-tools", help="Let the model look up Pokémon in the catalog."),
     ] = True,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print a validated, structured answer as JSON.")
+    ] = False,
 ) -> None:
     """Ask the LLM a question, letting it look up Pokémon in the local catalog."""
     settings: Settings = ctx.obj
@@ -185,7 +188,13 @@ def ask_command(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 tools=tools,
+                output_schema=POKEDEX_ANSWER_SCHEMA if as_json else None,
             )
+        if as_json:
+            try:
+                answer = PokedexAnswer.from_dict(completion.data or {})
+            except ValueError as error:
+                raise LlmRequestError(f"Model reply failed validation: {error}") from error
     except ValueError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
     except LlmAuthError as error:
@@ -195,7 +204,7 @@ def ask_command(
     except LlmRequestError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
 
-    typer.echo(completion.text)
+    typer.echo(json.dumps(answer.to_dict()) if as_json else completion.text)
     if show_usage:
         for call in completion.tool_calls:
             typer.echo(

@@ -10,6 +10,7 @@ pokeverse-ai/
 │   ├── __main__.py        # `python -m pokeverse` entry point
 │   ├── cli.py             # Typer app; `pokeverse` console script
 │   ├── agents/
+│   │   ├── answers.py     # PokedexAnswer + its strict JSON Schema
 │   │   └── tools.py       # get_pokemon catalog tool + input normalization
 │   └── catalog/
 │       ├── __init__.py    # Public catalog API (re-exports Pokemon)
@@ -20,10 +21,12 @@ pokeverse-ai/
 │   └── llm/
 │       ├── config.py      # LlmSettings (model id, temperature, max tokens, reasoning effort)
 │       ├── tools.py       # Provider-neutral Tool / ToolCall
+│       ├── structured.py  # Provider-neutral OutputSchema
 │       └── openai.py      # OpenAIChat (Responses API, tool loop) + LLM error types
 └── tests/
     ├── test_cli.py
     ├── agents/
+    │   ├── test_answers.py
     │   └── test_tools.py
     └── catalog/
         ├── fixtures/pokeapi/   # recorded PokéAPI responses
@@ -40,12 +43,13 @@ pokeverse-ai/
 
 | Component | Module | Responsibility |
 |-----------|--------|----------------|
-| CLI | `pokeverse.cli` | Typer app. `pokemon <name|id> [--json] [--offline]` and `list [--json]` over the local catalog; `ask <question> [--no-tools]` asks the LLM, which can look Pokémon up via the catalog tool (`--usage` traces tool calls). DB path from `--db`, `POKEVERSE_DB`, or `$XDG_DATA_HOME/pokeverse/catalog.db`. Exit codes: 0 ok, 1 not found, 2 invalid input, 3 upstream unavailable, 4 auth/credentials; errors on stderr. |
+| CLI | `pokeverse.cli` | Typer app. `pokemon <name|id> [--json] [--offline]` and `list [--json]` over the local catalog; `ask <question> [--no-tools] [--json]` asks the LLM, which can look Pokémon up via the catalog tool (`--usage` traces tool calls; `--json` prints a validated `PokedexAnswer`). DB path from `--db`, `POKEVERSE_DB`, or `$XDG_DATA_HOME/pokeverse/catalog.db`. Exit codes: 0 ok, 1 not found, 2 invalid input, 3 upstream unavailable, 4 auth/credentials; errors on stderr. |
 | Catalog models | `pokeverse.catalog.models` | Immutable, self-validating reference data: `Pokemon` (slug name, 1–2 types) and the `PokemonType` enum. |
 | PokéAPI client | `pokeverse.catalog.pokeapi` | Fetches a Pokémon by name/id, maps the payload to `Pokemon`, and translates HTTP/network failures into typed `PokeApiError` subclasses. Import-only; not a runtime dependency. |
 | Repository | `pokeverse.catalog.repository` | `SqlitePokemonRepository`: tables `pokemon` and `pokemon_type` (slot-ordered), schema version in `PRAGMA user_version`, atomic upserts. |
 | Catalog service | `pokeverse.catalog.service` | `PokemonCatalog`: reads locally first; on a miss imports via a `PokemonSource` (e.g. `PokeApiClient`) and stores the result. Raises `PokemonNotInCatalogError` or `UpstreamUnavailableError`; cached data never depends on upstream. |
-| LLM client | `pokeverse.llm` | `OpenAIChat.complete()` sends a Responses API request and returns a `Completion` (text, status, summed token usage, latency, `tool_calls`). With `tools`, it runs a bounded loop (default 5 rounds): execute each `function_call`, send back the model output plus `function_call_output`, repeat until a text reply. Tools are provider-neutral `Tool` objects sent in strict mode. Errors mapped to `LlmAuthError`, `LlmUnavailableError`, `LlmRequestError`. |
+| LLM client | `pokeverse.llm` | `OpenAIChat.complete()` sends a Responses API request and returns a `Completion` (text, status, summed token usage, latency, `tool_calls`). With `tools`, it runs a bounded loop (default 5 rounds): execute each `function_call`, send back the model output plus `function_call_output`, repeat until a text reply. Tools are provider-neutral `Tool` objects sent in strict mode. With an `OutputSchema`, the final reply is constrained by a strict `text.format` JSON Schema and parsed into `Completion.data`. Truncated replies (`status=incomplete`) and refusals raise instead of being parsed. Errors mapped to `LlmAuthError`, `LlmUnavailableError`, `LlmRequestError`. |
+| Structured answers | `pokeverse.agents.answers` | `PokedexAnswer` (`answer`, `pokemon` slugs, `confidence` enum) and `POKEDEX_ANSWER_SCHEMA`. The schema constrains generation; `PokedexAnswer.from_dict` re-validates in Python, so model output is never trusted unchecked. |
 | Catalog tools | `pokeverse.agents.tools` | `make_catalog_tools(catalog)` returns the read-only `get_pokemon` tool. Normalizes model input (`"Mr. Mime"` → `mr-mime`, `"#025"` → 25), returns `Pokemon.to_dict()`, and reports catalog failures as `{"error", "message"}` data so the model can explain them. |
 
 ### Runtime
@@ -57,7 +61,7 @@ pokeverse-ai/
 
 ## Target Shape for Phase 1
 
-Implemented up to tool calling; structured outputs and the Research Agent are planned:
+Implemented up to structured outputs; the Research Agent is planned:
 
 ```text
 PokéAPI ──> PokéAPI client ──> normalization ──> local catalog (SQLite)

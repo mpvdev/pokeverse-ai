@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Any
 
 # Matches PokéAPI resource slugs, e.g. "pikachu", "mr-mime", "porygon2".
-_NAME_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+NAME_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 MAX_TYPES = 2
 
@@ -53,7 +53,7 @@ class Pokemon:
         if self.pokedex_id <= 0:
             raise ValueError("pokedex_id must be positive")
 
-        if not isinstance(self.name, str) or not _NAME_PATTERN.fullmatch(self.name):
+        if not isinstance(self.name, str) or not NAME_PATTERN.fullmatch(self.name):
             raise ValueError("name must be a lowercase, hyphen-separated slug (e.g. 'mr-mime')")
 
         if not isinstance(self.types, tuple):

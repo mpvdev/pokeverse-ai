@@ -43,9 +43,11 @@ Each step is a small change implemented by the assistant and reviewed by the dev
 
 - [x] Step 6: tool calling — provider-neutral `Tool`/`ToolCall`, bounded tool loop in `OpenAIChat`, read-only `get_pokemon` catalog tool (`pokeverse.agents.tools`), `pokeverse ask` uses it by default (`--no-tools` to compare, `--usage` traces calls). Verified live.
 
+- [x] Step 7: structured outputs — provider-neutral `OutputSchema`, strict `text.format` JSON Schema in `OpenAIChat` (parsed into `Completion.data`; truncation and refusals raise `LlmRequestError`), self-validating `PokedexAnswer` (`answer`, `pokemon` slugs, `confidence`), `pokeverse ask --json`. Verified live.
+
 ## Next Up
 
-- Step 7: structured outputs (validated, typed responses from the model).
+- Step 8: Pokémon Research Agent — combine tools and structured outputs into the first agent; add basic evaluation cases.
 
 ## Running Locally
 
@@ -60,4 +62,5 @@ uv run pokeverse pokemon pikachu    # uses ~/.local/share/pokeverse/catalog.db
 uv run pokeverse list
 uv run pokeverse ask "What type is Pikachu?" --usage   # needs OPENAI_API_KEY in .env or the environment
 uv run pokeverse ask "What type is Pikachu?" --no-tools --usage   # model answers from memory only
+uv run pokeverse ask "What type is Pikachu?" --json              # validated structured answer
 ```

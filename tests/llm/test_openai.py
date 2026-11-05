@@ -12,6 +12,7 @@ from pokeverse.llm import (
     LlmSettings,
     LlmUnavailableError,
     OpenAIChat,
+    OutputSchema,
     Tool,
     ToolCall,
 )
@@ -23,12 +24,15 @@ def openai_response(
     text: str = "Pikachu is Electric-type.",
     output: list[Any] | None = None,
     usage: tuple[int, int] = (12, 7),
+    status: str = "completed",
+    incomplete_reason: str | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         output_text=text,
         output=output or [],
         model="test-model",
-        status="completed",
+        status=status,
+        incomplete_details=SimpleNamespace(reason=incomplete_reason) if incomplete_reason else None,
         usage=SimpleNamespace(input_tokens=usage[0], output_tokens=usage[1]),
     )
 
@@ -69,6 +73,7 @@ def test_complete_returns_text_and_usage() -> None:
     assert (completion.input_tokens, completion.output_tokens) == (12, 7)
     assert completion.total_tokens == 19
     assert completion.latency_ms >= 0
+    assert completion.data is None
     assert client.responses.requests == [
         {
             "model": "test-model",
@@ -240,6 +245,87 @@ def test_invalid_tool_arguments_raise_request_error() -> None:
         chat.complete("What type is Pikachu?", tools=[pokemon_tool()])
 
 
+def test_truncated_tool_call_reports_cut_off() -> None:
+    truncated = openai_response(
+        "",
+        output=[function_call(arguments='{"name_or')],
+        status="incomplete",
+        incomplete_reason="max_output_tokens",
+    )
+    chat = OpenAIChat(SETTINGS, client=FakeClient(truncated))
+
+    with pytest.raises(LlmRequestError, match=r"cut off \(max_output_tokens\)"):
+        chat.complete("What type is Pikachu?", tools=[pokemon_tool()])
+
+
+NUMBER_SCHEMA = OutputSchema(
+    name="pokedex_number",
+    schema={
+        "type": "object",
+        "properties": {"number": {"type": "integer"}},
+        "required": ["number"],
+        "additionalProperties": False,
+    },
+)
+
+
+def test_structured_output_is_requested_and_parsed() -> None:
+    client = FakeClient(openai_response('{"number": 25}'))
+    chat = OpenAIChat(SETTINGS, client=client)
+
+    completion = chat.complete("Pikachu's number?", output_schema=NUMBER_SCHEMA)
+
+    assert completion.data == {"number": 25}
+    assert client.responses.requests[0]["text"] == {
+        "format": {
+            "type": "json_schema",
+            "name": "pokedex_number",
+            "schema": dict(NUMBER_SCHEMA.schema),
+            "strict": True,
+        }
+    }
+
+
+def test_structured_output_after_tool_call() -> None:
+    client = FakeClient(
+        openai_response("", output=[function_call()]),
+        openai_response('{"number": 25}'),
+    )
+    chat = OpenAIChat(SETTINGS, client=client)
+
+    completion = chat.complete(
+        "Pikachu's number?", tools=[pokemon_tool()], output_schema=NUMBER_SCHEMA
+    )
+
+    assert completion.data == {"number": 25}
+    assert len(completion.tool_calls) == 1
+
+
+def refusal_message(text: str) -> SimpleNamespace:
+    return SimpleNamespace(type="message", content=[SimpleNamespace(type="refusal", refusal=text)])
+
+
+@pytest.mark.parametrize(
+    ("response", "match"),
+    [
+        (
+            openai_response('{"num', status="incomplete", incomplete_reason="max_output_tokens"),
+            r"cut off \(max_output_tokens\)",
+        ),
+        (openai_response("", output=[refusal_message("I can't help.")]), "refused"),
+        (openai_response("not json"), "not valid JSON"),
+        (openai_response("[25]"), "not a JSON object"),
+    ],
+)
+def test_unusable_structured_reply_raises_request_error(
+    response: SimpleNamespace, match: str
+) -> None:
+    chat = OpenAIChat(SETTINGS, client=FakeClient(response))
+
+    with pytest.raises(LlmRequestError, match=match):
+        chat.complete("Pikachu's number?", output_schema=NUMBER_SCHEMA)
+
+
 @pytest.mark.openai
 def test_live_openai_completion() -> None:
     load_dotenv(find_dotenv(usecwd=True))
@@ -263,3 +349,15 @@ def test_live_openai_tool_call() -> None:
     assert handled
     assert completion.tool_calls[0].name == "get_pokemon"
     assert "25" in completion.text
+
+
+@pytest.mark.openai
+def test_live_openai_structured_output() -> None:
+    load_dotenv(find_dotenv(usecwd=True))
+    completion = OpenAIChat(LlmSettings.from_env()).complete(
+        "What is Pikachu's National Pokédex number?",
+        tools=[pokemon_tool()],
+        output_schema=NUMBER_SCHEMA,
+    )
+
+    assert completion.data == {"number": 25}

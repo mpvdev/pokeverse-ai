@@ -19,6 +19,7 @@ from openai import (
 )
 
 from pokeverse.llm.config import LlmSettings
+from pokeverse.llm.structured import OutputSchema
 from pokeverse.llm.tools import Tool, ToolCall
 
 DEFAULT_MAX_TOOL_ROUNDS = 5
@@ -51,6 +52,7 @@ class Completion:
     output_tokens: int
     latency_ms: int
     tool_calls: tuple[ToolCall, ...] = ()
+    data: dict[str, Any] | None = None
 
     @property
     def total_tokens(self) -> int:
@@ -82,8 +84,13 @@ class OpenAIChat:
         max_tokens: int | None = None,
         tools: Sequence[Tool] = (),
         max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
+        output_schema: OutputSchema | None = None,
     ) -> Completion:
-        """Answer ``prompt``, running any requested ``tools`` until the model replies in text."""
+        """Answer ``prompt``, running any requested ``tools`` until the model replies.
+
+        With ``output_schema``, the final reply is constrained to that JSON Schema and
+        parsed into ``Completion.data``.
+        """
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
         settings = replace(
@@ -104,6 +111,15 @@ class OpenAIChat:
             request["instructions"] = system
         if tools:
             request["tools"] = [_tool_schema(tool) for tool in tools]
+        if output_schema is not None:
+            request["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "name": output_schema.name,
+                    "schema": dict(output_schema.schema),
+                    "strict": True,
+                }
+            }
 
         tools_by_name = {tool.name: tool for tool in tools}
         conversation: list[Any] = [{"role": "user", "content": prompt}]
@@ -125,9 +141,11 @@ class OpenAIChat:
                     output_tokens=output_tokens,
                     latency_ms=round((time.perf_counter() - started) * 1000),
                     tool_calls=tuple(tool_calls),
+                    data=_structured_data(response) if output_schema else None,
                 )
 
             # Reasoning items must be sent back together with the tool results.
+            _raise_if_cut_off(response)
             conversation += response.output
             for item in function_calls:
                 call = _run_tool(tools_by_name, item)
@@ -197,6 +215,32 @@ def _usage(response: Any) -> tuple[int, int]:
         raise LlmRequestError(f"Malformed OpenAI response: {error}") from error
 
 
+def _raise_if_cut_off(response: Any) -> None:
+    """Truncated tool arguments or JSON replies are unusable, unlike truncated prose."""
+    if getattr(response, "status", None) == "incomplete":
+        details = getattr(response, "incomplete_details", None)
+        reason = getattr(details, "reason", None) or "unknown reason"
+        raise LlmRequestError(f"Model reply was cut off ({reason}); try a larger --max-tokens")
+
+
+def _structured_data(response: Any) -> dict[str, Any]:
+    _raise_if_cut_off(response)
+    try:
+        for item in response.output:
+            if item.type == "message":
+                for part in item.content:
+                    if part.type == "refusal":
+                        raise LlmRequestError(f"Model refused to answer: {part.refusal}")
+        data = json.loads(response.output_text)
+    except (AttributeError, TypeError) as error:
+        raise LlmRequestError(f"Malformed OpenAI response: {error}") from error
+    except json.JSONDecodeError as error:
+        raise LlmRequestError("Structured reply is not valid JSON") from error
+    if not isinstance(data, dict):
+        raise LlmRequestError("Structured reply is not a JSON object")
+    return data
+
+
 def _completion(
     response: Any,
     *,
@@ -204,6 +248,7 @@ def _completion(
     output_tokens: int,
     latency_ms: int,
     tool_calls: tuple[ToolCall, ...],
+    data: dict[str, Any] | None,
 ) -> Completion:
     try:
         return Completion(
@@ -214,6 +259,7 @@ def _completion(
             output_tokens=output_tokens,
             latency_ms=latency_ms,
             tool_calls=tool_calls,
+            data=data,
         )
     except AttributeError as error:
         raise LlmRequestError(f"Malformed OpenAI response: {error}") from error
