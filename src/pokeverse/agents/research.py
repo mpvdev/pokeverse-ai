@@ -8,6 +8,7 @@ from pokeverse.agents.answers import POKEDEX_ANSWER_SCHEMA, PokedexAnswer
 from pokeverse.agents.tools import make_catalog_tools
 from pokeverse.catalog import PokemonCatalog
 from pokeverse.llm import Completion, LlmRequestError, OutputSchema, Tool
+from pokeverse.llm.openai import DEFAULT_MAX_TOOL_ROUNDS
 
 RESEARCH_SYSTEM_PROMPT = (
     "You are the PokéVerse Research Agent, an expert on Pokémon. "
@@ -33,6 +34,7 @@ class ChatModel(Protocol):
         max_tokens: int | None = None,
         tools: Sequence[Tool] = (),
         output_schema: OutputSchema | None = None,
+        max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
     ) -> Completion: ...
 
 

@@ -16,6 +16,7 @@ from pokeverse.agents import (
     POKEDEX_ANSWER_SCHEMA,
     PokedexAnswer,
     ResearchAgent,
+    TeamCompositionAgent,
     make_catalog_tools,
     normalize_pokemon_identifier,
 )
@@ -36,7 +37,7 @@ from pokeverse.llm import (
     LlmUnavailableError,
     OpenAIChat,
 )
-from pokeverse.teams import MAX_TEAM_SIZE, Team, analyze_team
+from pokeverse.teams import MAX_TEAM_SIZE, Team, TeamAnalysis, analyze_team
 
 EXIT_NOT_FOUND = 1
 EXIT_INVALID_INPUT = 2
@@ -188,6 +189,10 @@ def team_command(
         typer.echo(json.dumps(analysis.to_dict()))
         return
     typer.echo("Team: " + ", ".join(member.display_name for member in analysis.team.members))
+    print_analysis(analysis)
+
+
+def print_analysis(analysis: TeamAnalysis) -> None:
     typer.echo("Vulnerable to:" + ("" if analysis.vulnerabilities else " none"))
     for exposure in analysis.vulnerabilities:
         cover = ", ".join(exposure.resists + exposure.immune) or "nobody"
@@ -195,6 +200,37 @@ def team_command(
         typer.echo(f"  {exposure.attacking_type:<9} weak: {weak} | resisted by: {cover}")
     typer.echo("Unresisted attack types: " + (", ".join(analysis.unresisted) or "none"))
     typer.echo("Offensive gaps (STAB): " + (", ".join(analysis.offensive_gaps) or "none"))
+
+
+@app.command("build")
+def build_command(
+    ctx: typer.Context,
+    request: Annotated[str, typer.Argument(help="What the team should be, in plain words.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    show_usage: Annotated[
+        bool, typer.Option("--usage", help="Print tool calls and token usage to stderr.")
+    ] = False,
+) -> None:
+    """Ask the Team Composition Agent to build a team; our code re-checks the result."""
+    settings: Settings = ctx.obj
+    with llm_errors():
+        chat = OpenAIChat(LlmSettings.from_env())
+        with open_catalog(settings, offline=False) as catalog:
+            result = TeamCompositionAgent(chat, catalog).build(request)
+
+    if as_json:
+        typer.echo(json.dumps(result.to_dict()))
+    else:
+        members = zip(result.analysis.team.members, result.proposal.members, strict=True)
+        for pokemon, choice in members:
+            types = "/".join(t.value for t in pokemon.types)
+            typer.echo(f"  {pokemon.display_name:<14} {types:<16} {choice.role}")
+        typer.echo(f"\n{result.proposal.summary}\n")
+        print_analysis(result.analysis)
+    if not result.self_checked:
+        typer.echo("Warning: the agent did not analyze this exact team before answering", err=True)
+    if show_usage:
+        print_usage(result.completion)
 
 
 @app.command("ask")
@@ -260,6 +296,8 @@ def llm_errors() -> Iterator[None]:
     except LlmAuthError as error:
         raise fail(str(error), EXIT_AUTH) from error
     except LlmUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+    except UpstreamUnavailableError as error:
         raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
     except LlmRequestError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error

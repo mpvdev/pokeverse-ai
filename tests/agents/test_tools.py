@@ -1,8 +1,9 @@
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
-from pokeverse.agents import make_catalog_tools, normalize_pokemon_identifier
+from pokeverse.agents import make_catalog_tools, make_team_tools, normalize_pokemon_identifier
 from pokeverse.catalog import (
     Pokemon,
     PokemonCatalog,
@@ -94,6 +95,37 @@ def test_get_type_matchups_computes_defensive_profile(
 
 
 def test_schemas_are_strict_mode_compatible(repository: SqlitePokemonRepository) -> None:
-    for tool in make_catalog_tools(PokemonCatalog(repository)):
+    catalog = PokemonCatalog(repository)
+    for tool in make_catalog_tools(catalog) + make_team_tools(catalog):
         assert tool.parameters["additionalProperties"] is False
         assert set(tool.parameters["required"]) == set(tool.parameters["properties"])
+
+
+def analyze(catalog: PokemonCatalog, names: list[str]) -> dict[str, Any]:
+    (tool,) = make_team_tools(catalog)
+    return tool.handler(names=names)
+
+
+def test_analyze_team_returns_compact_analysis(repository: SqlitePokemonRepository) -> None:
+    result = analyze(PokemonCatalog(repository), ["Mr. Mime", "mr-mime"])
+
+    assert [m["name"] for m in result["team"]["members"]] == ["mr-mime", "mr-mime"]
+    assert {v["attacking_type"] for v in result["vulnerabilities"]} == {
+        "poison",
+        "ghost",
+        "steel",
+    }
+    assert "exposures" not in result
+
+
+def test_analyze_team_reports_which_member_failed(repository: SqlitePokemonRepository) -> None:
+    result = analyze(PokemonCatalog(repository), ["mr-mime", "missingno"])
+
+    assert result["error"] == "not_found"
+    assert result["name"] == "missingno"
+
+
+def test_analyze_team_rejects_oversized_team(repository: SqlitePokemonRepository) -> None:
+    result = analyze(PokemonCatalog(repository), ["mr-mime"] * 7)
+
+    assert result["error"] == "invalid_team"

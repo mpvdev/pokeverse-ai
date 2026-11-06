@@ -70,9 +70,11 @@ Deliverable: a multi-agent Pokémon team advisor.
 
 - [x] Step 2: team model and analysis — `pokeverse.teams`: immutable `Team` (1–6 Pokémon; the same species may repeat) and deterministic `analyze_team` → `TeamAnalysis` with per-type exposure (weak / resists / immune members), vulnerabilities (≥2 weak members and weak outnumber cover), unresisted attack types, and STAB-only offensive gaps. `pokeverse team <names…> [--json] [--offline]` (size checked before any lookup). Type-based only: no moves, abilities or stats yet.
 
+- [x] Step 3: Team Composition Agent — `TeamCompositionAgent.build(request)` with `get_pokemon`, `get_type_matchups` and a new deterministic `analyze_team` tool (compact analysis, errors as data); strict `TeamProposal` output (members with roles + summary), validated in Python; our code resolves every member through the catalog (invented Pokémon → `LlmRequestError`), runs its own `analyze_team`, and reports `self_checked` (did the agent analyze exactly the final team). `pokeverse build "<request>" [--json] [--usage]`. Live: "balanced team of 6 around Pikachu" → no vulnerabilities, self-checked, routed around two PokéAPI timeouts, ~5.3k tokens / 34 s cold. Known gap: on "4 Fire-types only" it accepted its first draft (one `analyze_team` call) with three Fire/Dragon members, adding an avoidable Dragon vulnerability while calling the weaknesses unavoidable — the target for Step 6 (Team Optimization) and the baseline for Step 7.
+
 ## Next Up
 
-- Phase 2, Step 3: Team Composition Agent (builds a team from user constraints as a validated `TeamProposal`, using team analysis as a tool).
+- Phase 2, Step 4: Supervisor Agent and delegation (routes a request to the Research or Team Composition agent).
 
 ## Running Locally
 
@@ -91,4 +93,5 @@ uv run pokeverse ask "What type is Pikachu?" --json              # validated str
 uv run pokeverse research "What type is Mr. Mime?" --usage       # Research Agent
 uv run pokeverse eval                                            # evaluation suite (live, costs tokens)
 uv run pokeverse team charizard blastoise venusaur              # deterministic team analysis
+uv run pokeverse build "A balanced team of 6 around Pikachu"    # Team Composition Agent
 ```

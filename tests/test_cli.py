@@ -8,7 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from pokeverse import cli
-from pokeverse.agents import POKEDEX_ANSWER_SCHEMA
+from pokeverse.agents import POKEDEX_ANSWER_SCHEMA, TEAM_PROPOSAL_SCHEMA
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.cli import (
     EXIT_AUTH,
@@ -235,6 +235,7 @@ class FakeChat:
     calls: list[dict[str, object]] = []
     error: Exception | None = None
     data: dict[str, Any] | None = None
+    analyzed: list[str] | None = None
 
     def __init__(self, settings: object = None) -> None:
         pass
@@ -245,14 +246,29 @@ class FakeChat:
         FakeChat.calls.append({"prompt": prompt, **kwargs})
         if FakeChat.error is not None:
             raise FakeChat.error
-        tool_calls = tuple(
-            ToolCall(tool.name, {"name_or_id": "Pikachu"}, tool.handler(name_or_id="Pikachu"))
-            for tool in kwargs.get("tools", ())
-        )
+        tool_calls = []
+        for tool in kwargs.get("tools", ()):
+            arguments = FakeChat.arguments_for(tool)
+            tool_calls.append(ToolCall(tool.name, arguments, tool.handler(**arguments)))
         data = FakeChat.data if kwargs.get("output_schema") else None
         return Completion(
-            "Pikachu is Electric-type.", "fake-model", "end_turn", 10, 5, 42, tool_calls, data
+            "Pikachu is Electric-type.",
+            "fake-model",
+            "end_turn",
+            10,
+            5,
+            42,
+            tuple(tool_calls),
+            data,
         )
+
+    @staticmethod
+    def arguments_for(tool: Any) -> dict[str, Any]:
+        if "name_or_id" in tool.parameters["properties"]:
+            return {"name_or_id": "Pikachu"}
+        if FakeChat.analyzed is not None:
+            return {"names": FakeChat.analyzed}
+        return {"names": [m["name"] for m in (FakeChat.data or {}).get("members", [])]}
 
 
 @pytest.fixture
@@ -262,6 +278,7 @@ def fake_chat(
     FakeChat.calls = []
     FakeChat.error = None
     FakeChat.data = None
+    FakeChat.analyzed = None
     monkeypatch.setattr(cli, "OpenAIChat", FakeChat)
     monkeypatch.setenv("POKEVERSE_DB", str(tmp_path / "ask.db"))
     return FakeChat
@@ -429,3 +446,59 @@ def test_eval_rejects_unknown_case(fake_chat: type[FakeChat]) -> None:
     assert result.exit_code == EXIT_INVALID_INPUT
     assert "unknown case" in result.stderr
     assert fake_chat.calls == []
+
+
+TEAM_PROPOSAL = {
+    "members": [
+        {"name": "pikachu", "role": "fast electric attacker"},
+        {"name": "charizard", "role": "fire coverage"},
+    ],
+    "summary": "Pikachu leads; Charizard handles Ground threats.",
+}
+
+
+def test_build_prints_team_summary_and_our_analysis(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = TEAM_PROPOSAL
+
+    result = runner.invoke(app, ["build", "A team around Pikachu"])
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines[0].split() == ["Pikachu", "electric", "fast", "electric", "attacker"]
+    assert lines[1].split()[:2] == ["Charizard", "fire/flying"]
+    assert "Pikachu leads; Charizard handles Ground threats." in lines
+    assert "Vulnerable to: none" in lines
+    assert result.stderr == ""
+    assert fake_chat.calls[0]["output_schema"] is TEAM_PROPOSAL_SCHEMA
+
+
+def test_build_json(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = TEAM_PROPOSAL
+
+    result = runner.invoke(app, ["build", "A team around Pikachu", "--json"])
+
+    data = json.loads(result.stdout)
+    assert data["members"] == TEAM_PROPOSAL["members"]
+    assert data["self_checked"] is True
+    assert data["analysis"]["vulnerabilities"] == []
+    assert "exposures" not in data["analysis"]
+
+
+def test_build_warns_when_final_team_was_not_analyzed(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = TEAM_PROPOSAL
+    fake_chat.analyzed = ["pikachu"]
+
+    result = runner.invoke(app, ["build", "A team around Pikachu"])
+
+    assert result.exit_code == 0
+    assert "did not analyze this exact team" in result.stderr
+
+
+def test_build_rejects_invented_pokemon(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = {**TEAM_PROPOSAL, "members": [{"name": "pikablu", "role": "x"}]}
+    fake_chat.analyzed = ["pikachu"]
+
+    result = runner.invoke(app, ["build", "A team around Pikachu"])
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "does not exist" in result.stderr
