@@ -147,6 +147,53 @@ def test_list_empty_catalog(db: str) -> None:
     assert "empty" in result.stdout
 
 
+def test_team_prints_analysis(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "team", "Pikachu", "charizard")
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines[0] == "Team: Pikachu, Charizard"
+    assert lines[1] == "Vulnerable to: none"
+    assert lines[2].startswith("Unresisted attack types: normal, water")
+    assert lines[3].startswith("Offensive gaps (STAB): normal, fire")
+
+
+def test_team_json(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "team", "25", "6", "--json")
+
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert [member["name"] for member in data["team"]["members"]] == ["pikachu", "charizard"]
+    assert data["vulnerabilities"] == []
+
+
+def test_team_allows_repeated_pokemon(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "team", "pikachu", "Pikachu", "--json")
+
+    assert result.exit_code == 0
+    ground = next(
+        e for e in json.loads(result.stdout)["vulnerabilities"] if e["attacking_type"] == "ground"
+    )
+    assert ground["weak"] == ["pikachu", "pikachu"]
+    assert upstream.requests == ["/api/v2/pokemon/pikachu"]
+
+
+def test_team_unknown_pokemon_exits_not_found(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "team", "pikachu", "missingno")
+
+    assert result.exit_code == EXIT_NOT_FOUND
+    assert result.stdout == ""
+    assert "does not exist" in result.stderr
+
+
+def test_team_size_is_checked_before_any_lookup(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "team", *["pikachu"] * 7)
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "at most 6" in result.stderr
+    assert upstream.requests == []
+
+
 def test_list_shows_stored_pokemon_in_pokedex_order(db: str, upstream: Upstream) -> None:
     invoke(db, "pokemon", "pikachu")
     invoke(db, "pokemon", "charizard")

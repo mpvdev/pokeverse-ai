@@ -17,6 +17,7 @@ from pokeverse.agents import (
     PokedexAnswer,
     ResearchAgent,
     make_catalog_tools,
+    normalize_pokemon_identifier,
 )
 from pokeverse.catalog import (
     Pokemon,
@@ -35,6 +36,7 @@ from pokeverse.llm import (
     LlmUnavailableError,
     OpenAIChat,
 )
+from pokeverse.teams import MAX_TEAM_SIZE, Team, analyze_team
 
 EXIT_NOT_FOUND = 1
 EXIT_INVALID_INPUT = 2
@@ -154,6 +156,45 @@ def list_command(
     else:
         for pokemon in stored:
             typer.echo(format_pokemon(pokemon))
+
+
+@app.command("team")
+def team_command(
+    ctx: typer.Context,
+    names: Annotated[
+        list[str], typer.Argument(help="1-6 Pokémon names or Pokédex ids (repeats allowed).")
+    ],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Analyze a team's type weaknesses and coverage (deterministic, no LLM)."""
+    settings: Settings = ctx.obj
+    if len(names) > MAX_TEAM_SIZE:
+        raise fail(f"a team can have at most {MAX_TEAM_SIZE} Pokémon", EXIT_INVALID_INPUT)
+    try:
+        with open_catalog(settings, offline=offline) as catalog:
+            members = tuple(catalog.get(normalize_pokemon_identifier(name)) for name in names)
+        analysis = analyze_team(Team(members))
+    except ValueError as error:
+        raise fail(str(error), EXIT_INVALID_INPUT) from error
+    except PokemonNotInCatalogError as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+    except UpstreamUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+
+    if as_json:
+        typer.echo(json.dumps(analysis.to_dict()))
+        return
+    typer.echo("Team: " + ", ".join(member.display_name for member in analysis.team.members))
+    typer.echo("Vulnerable to:" + ("" if analysis.vulnerabilities else " none"))
+    for exposure in analysis.vulnerabilities:
+        cover = ", ".join(exposure.resists + exposure.immune) or "nobody"
+        weak = ", ".join(exposure.weak)
+        typer.echo(f"  {exposure.attacking_type:<9} weak: {weak} | resisted by: {cover}")
+    typer.echo("Unresisted attack types: " + (", ".join(analysis.unresisted) or "none"))
+    typer.echo("Offensive gaps (STAB): " + (", ".join(analysis.offensive_gaps) or "none"))
 
 
 @app.command("ask")

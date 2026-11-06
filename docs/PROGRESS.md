@@ -56,7 +56,7 @@ Each step is a small change implemented by the assistant and reviewed by the dev
 Deliverable: a multi-agent Pokémon team advisor.
 
 1. **Type matchups as a deterministic tool** — close the Phase 1 gap; team building needs it.
-2. **Team model and validation** — a `Team` domain model (1–6 Pokémon, no duplicates) and deterministic team analysis (shared weaknesses, uncovered types).
+2. **Team model and validation** — a `Team` domain model (1–6 Pokémon, repeats allowed) and deterministic team analysis (shared weaknesses, uncovered types).
 3. **Team Composition Agent** — builds a team from user constraints, as a structured, validated `TeamProposal`.
 4. **Supervisor Agent and delegation** — routes a request to the Research or Team Composition agent (specialists exposed to the supervisor as tools).
 5. **Shared context and handoffs** — one task record passed between agents, with a trace of who did what.
@@ -68,9 +68,11 @@ Deliverable: a multi-agent Pokémon team advisor.
 
 - [x] Step 1: type matchups — hard-coded Gen 6+ chart in `pokeverse.catalog.type_chart` (`effectiveness`, `defensive_profile`), verified row by row against PokéAPI by an opt-in network test; `get_type_matchups` catalog tool; Research Agent prompt forbids computing matchups from memory; grounding also counts Pokémon returned by the matchup tool. Evals: 3 matchup cases with `required_tools`; the unknown-Pokémon case now checks for invented types (`must_not_mention`) instead of self-reported confidence. Live: 10/10 passed, tool use 10/10, 11,746 tokens (~1.2k per question, up from ~0.84k: every request now carries two tool definitions), ~3.8 s average latency. The Phase 1 Gengar question is now answered correctly ("Yes, 2×").
 
+- [x] Step 2: team model and analysis — `pokeverse.teams`: immutable `Team` (1–6 Pokémon; the same species may repeat) and deterministic `analyze_team` → `TeamAnalysis` with per-type exposure (weak / resists / immune members), vulnerabilities (≥2 weak members and weak outnumber cover), unresisted attack types, and STAB-only offensive gaps. `pokeverse team <names…> [--json] [--offline]` (size checked before any lookup). Type-based only: no moves, abilities or stats yet.
+
 ## Next Up
 
-- Phase 2, Step 2: team model and deterministic team analysis.
+- Phase 2, Step 3: Team Composition Agent (builds a team from user constraints as a validated `TeamProposal`, using team analysis as a tool).
 
 ## Running Locally
 
@@ -88,4 +90,5 @@ uv run pokeverse ask "What type is Pikachu?" --no-tools --usage   # model answer
 uv run pokeverse ask "What type is Pikachu?" --json              # validated structured answer
 uv run pokeverse research "What type is Mr. Mime?" --usage       # Research Agent
 uv run pokeverse eval                                            # evaluation suite (live, costs tokens)
+uv run pokeverse team charizard blastoise venusaur              # deterministic team analysis
 ```
