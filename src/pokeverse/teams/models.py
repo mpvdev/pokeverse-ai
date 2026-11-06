@@ -27,4 +27,5 @@ class Team:
         return tuple(member.name for member in self.members)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"members": [member.to_dict() for member in self.members]}
+        # Team analysis is type-based, so base stats would only cost tokens in agent tools.
+        return {"members": [member.to_dict(stats=False) for member in self.members]}

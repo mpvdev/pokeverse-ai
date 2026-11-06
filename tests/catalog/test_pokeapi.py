@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 import pytest
 
-from pokeverse.catalog import Pokemon, PokemonType
+from pokeverse.catalog import BaseStats, Pokemon, PokemonType
 from pokeverse.catalog.pokeapi import (
     DEFAULT_BASE_URL,
     PokeApiClient,
@@ -19,6 +19,11 @@ from pokeverse.catalog.pokeapi import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "pokeapi"
+
+PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), BaseStats(35, 55, 40, 50, 50, 90))
+CHARIZARD = Pokemon(
+    6, "charizard", (PokemonType.FIRE, PokemonType.FLYING), BaseStats(78, 84, 78, 109, 85, 100)
+)
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -44,13 +49,18 @@ def fixture_handler(request: httpx.Request) -> httpx.Response:
 
 
 def test_parse_single_type_pokemon() -> None:
-    assert parse_pokemon(load_fixture("pikachu")) == Pokemon(25, "pikachu", (PokemonType.ELECTRIC,))
+    assert parse_pokemon(load_fixture("pikachu")) == PIKACHU
 
 
 def test_parse_dual_type_pokemon() -> None:
-    assert parse_pokemon(load_fixture("charizard")) == Pokemon(
-        6, "charizard", (PokemonType.FIRE, PokemonType.FLYING)
-    )
+    assert parse_pokemon(load_fixture("charizard")) == CHARIZARD
+
+
+def test_parse_ignores_stat_order() -> None:
+    payload = load_fixture("charizard")
+    payload["stats"].reverse()
+
+    assert parse_pokemon(payload).stats == CHARIZARD.stats
 
 
 def test_parse_orders_types_by_slot() -> None:
@@ -79,6 +89,12 @@ def test_parse_skips_non_elemental_types() -> None:
         lambda p: p.update(types="electric"),
         lambda p: p.update(id="25"),
         lambda p: p.update(name="Pikachu"),
+        lambda p: p.pop("stats"),
+        lambda p: p.update(stats=[]),
+        lambda p: p["stats"].pop(),
+        lambda p: p["stats"][0].update(base_stat=0),
+        lambda p: p["stats"][0].update(base_stat="35"),
+        lambda p: p["stats"][0].pop("stat"),
     ],
 )
 def test_parse_rejects_malformed_payload(mutate: Callable[[dict[str, Any]], Any]) -> None:
@@ -95,7 +111,7 @@ def test_parse_rejects_malformed_payload(mutate: Callable[[dict[str, Any]], Any]
 @pytest.mark.parametrize("identifier", ["pikachu", "Pikachu", "  PIKACHU ", 25])
 def test_fetch_pokemon_by_name_or_id(identifier: str | int) -> None:
     with make_client(fixture_handler) as client:
-        assert client.fetch_pokemon(identifier) == Pokemon(25, "pikachu", (PokemonType.ELECTRIC,))
+        assert client.fetch_pokemon(identifier) == PIKACHU
 
 
 def test_fetch_pokemon_sends_expected_request() -> None:

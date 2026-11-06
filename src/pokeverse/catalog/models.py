@@ -1,7 +1,7 @@
 """Core domain models for the Pokémon catalog."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from typing import Any
 
@@ -9,6 +9,10 @@ from typing import Any
 NAME_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 MAX_TYPES = 2
+
+# Base stats are stored in one byte in the games.
+MIN_BASE_STAT = 1
+MAX_BASE_STAT = 255
 
 
 class PokemonType(StrEnum):
@@ -35,6 +39,33 @@ class PokemonType(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class BaseStats:
+    """A species' six base stats. Field names match PokéAPI stat names with ``_`` for ``-``."""
+
+    hp: int
+    attack: int
+    defense: int
+    special_attack: int
+    special_defense: int
+    speed: int
+
+    def __post_init__(self) -> None:
+        for stat in fields(self):
+            value = getattr(self, stat.name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{stat.name} must be an integer")
+            if not MIN_BASE_STAT <= value <= MAX_BASE_STAT:
+                raise ValueError(f"{stat.name} must be between {MIN_BASE_STAT} and {MAX_BASE_STAT}")
+
+    @property
+    def total(self) -> int:
+        return sum(self.to_dict().values())
+
+    def to_dict(self) -> dict[str, int]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
 class Pokemon:
     """A validated, immutable Pokémon reference record.
 
@@ -46,6 +77,7 @@ class Pokemon:
     pokedex_id: int
     name: str
     types: tuple[PokemonType, ...]
+    stats: BaseStats
 
     def __post_init__(self) -> None:
         if isinstance(self.pokedex_id, bool) or not isinstance(self.pokedex_id, int):
@@ -65,18 +97,27 @@ class Pokemon:
         if len(set(self.types)) != len(self.types):
             raise ValueError("types must not contain duplicates")
 
+        if not isinstance(self.stats, BaseStats):
+            raise ValueError("stats must be BaseStats")
+
     @property
     def display_name(self) -> str:
         """Human-friendly name derived from the slug (e.g. ``mr-mime`` -> ``Mr Mime``)."""
         return self.name.replace("-", " ").title()
 
-    def to_dict(self) -> dict[str, Any]:
-        """JSON-serializable representation, stable for CLI output and LLM tools."""
-        return {
+    def to_dict(self, *, stats: bool = True) -> dict[str, Any]:
+        """JSON-serializable representation, stable for CLI output and LLM tools.
+
+        ``stats=False`` omits base stats where only identity and types matter (saves tokens).
+        """
+        data: dict[str, Any] = {
             "pokedex_id": self.pokedex_id,
             "name": self.name,
             "types": [pokemon_type.value for pokemon_type in self.types],
         }
+        if stats:
+            data["base_stats"] = self.stats.to_dict()
+        return data
 
 
 def parse_identifier(name_or_id: str | int) -> str | int:

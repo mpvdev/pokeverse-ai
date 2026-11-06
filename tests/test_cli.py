@@ -80,7 +80,10 @@ def test_pokemon_lookup_prints_summary(db: str, upstream: Upstream) -> None:
     result = invoke(db, "pokemon", "Charizard")
 
     assert result.exit_code == 0
-    assert result.stdout == "#0006 Charizard — Fire / Flying\n"
+    assert result.stdout == (
+        "#0006 Charizard — Fire / Flying\n"
+        "HP 78 / Atk 84 / Def 78 / SpA 109 / SpD 85 / Spe 100 (total 534)\n"
+    )
 
 
 def test_pokemon_lookup_by_id_as_json(db: str, upstream: Upstream) -> None:
@@ -91,6 +94,14 @@ def test_pokemon_lookup_by_id_as_json(db: str, upstream: Upstream) -> None:
         "pokedex_id": 25,
         "name": "pikachu",
         "types": ["electric"],
+        "base_stats": {
+            "hp": 35,
+            "attack": 55,
+            "defense": 40,
+            "special_attack": 50,
+            "special_defense": 50,
+            "speed": 90,
+        },
     }
 
 

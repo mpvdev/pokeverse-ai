@@ -9,10 +9,16 @@ from pokeverse.agents import (
     Confidence,
     ResearchAgent,
 )
-from pokeverse.catalog import Pokemon, PokemonCatalog, PokemonType, SqlitePokemonRepository
+from pokeverse.catalog import (
+    BaseStats,
+    Pokemon,
+    PokemonCatalog,
+    PokemonType,
+    SqlitePokemonRepository,
+)
 from pokeverse.llm import Completion, LlmRequestError, ToolCall
 
-PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,))
+PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), BaseStats(35, 55, 40, 50, 50, 90))
 
 
 class ScriptedChat:

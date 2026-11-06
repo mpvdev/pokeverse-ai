@@ -6,6 +6,7 @@ import pytest
 from pokeverse.agents import make_catalog_tools, make_team_tools, normalize_pokemon_identifier
 from pokeverse.agents.tools import make_score_tool
 from pokeverse.catalog import (
+    BaseStats,
     Pokemon,
     PokemonCatalog,
     PokemonType,
@@ -13,7 +14,9 @@ from pokeverse.catalog import (
 )
 from pokeverse.catalog.pokeapi import PokeApiUnavailableError
 
-MR_MIME = Pokemon(122, "mr-mime", (PokemonType.PSYCHIC, PokemonType.FAIRY))
+MR_MIME = Pokemon(
+    122, "mr-mime", (PokemonType.PSYCHIC, PokemonType.FAIRY), BaseStats(40, 45, 65, 100, 120, 90)
+)
 
 
 class DownSource:

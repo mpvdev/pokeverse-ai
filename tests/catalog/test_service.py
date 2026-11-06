@@ -3,6 +3,7 @@ from collections.abc import Iterator
 import pytest
 
 from pokeverse.catalog import (
+    BaseStats,
     Pokemon,
     PokemonCatalog,
     PokemonNotInCatalogError,
@@ -18,8 +19,10 @@ from pokeverse.catalog.pokeapi import (
     PokemonNotFoundError,
 )
 
-PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,))
-CHARIZARD = Pokemon(6, "charizard", (PokemonType.FIRE, PokemonType.FLYING))
+PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), BaseStats(35, 55, 40, 50, 50, 90))
+CHARIZARD = Pokemon(
+    6, "charizard", (PokemonType.FIRE, PokemonType.FLYING), BaseStats(78, 84, 78, 109, 85, 100)
+)
 
 
 class FakeSource:

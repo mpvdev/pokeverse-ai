@@ -7,10 +7,16 @@ from pokeverse.agents import RESEARCH_SYSTEM_PROMPT, Supervisor
 from pokeverse.agents.optimizer import OPTIMIZER_SYSTEM_PROMPT
 from pokeverse.agents.supervisor import SUPERVISOR_SYSTEM_PROMPT, supervisor_prompt
 from pokeverse.agents.team_builder import TEAM_BUILDER_SYSTEM_PROMPT
-from pokeverse.catalog import Pokemon, PokemonCatalog, PokemonType, SqlitePokemonRepository
+from pokeverse.catalog import (
+    BaseStats,
+    Pokemon,
+    PokemonCatalog,
+    PokemonType,
+    SqlitePokemonRepository,
+)
 from pokeverse.llm import Completion, LlmRequestError, ToolCall
 
-PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,))
+PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), BaseStats(35, 55, 40, 50, 50, 90))
 GOOD_ANSWER = {"answer": "Pikachu is Electric-type.", "pokemon": ["pikachu"], "confidence": "high"}
 TEAM = {"members": [{"name": "pikachu", "role": "lead"}], "summary": "Just Pikachu."}
 

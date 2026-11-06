@@ -11,7 +11,7 @@ from typing import Any, Self
 
 import httpx
 
-from pokeverse.catalog.models import Pokemon, PokemonType, parse_identifier
+from pokeverse.catalog.models import BaseStats, Pokemon, PokemonType, parse_identifier
 
 DEFAULT_BASE_URL = "https://pokeapi.co/api/v2"
 DEFAULT_TIMEOUT_SECONDS = 10.0
@@ -41,7 +41,7 @@ def parse_pokemon(payload: Mapping[str, Any]) -> Pokemon:
     """Map a PokéAPI ``/pokemon/{id}`` payload to a validated ``Pokemon``.
 
     Types are ordered by slot. Non-elemental types that are not part of
-    ``PokemonType`` (e.g. ``stellar``) are skipped.
+    ``PokemonType`` (e.g. ``stellar``) are skipped. All six base stats are required.
     """
     try:
         type_entries = sorted(payload["types"], key=lambda entry: entry["slot"])
@@ -50,7 +50,16 @@ def parse_pokemon(payload: Mapping[str, Any]) -> Pokemon:
             for entry in type_entries
             if entry["type"]["name"] in PokemonType
         )
-        return Pokemon(pokedex_id=payload["id"], name=payload["name"], types=types)
+        base = {entry["stat"]["name"]: entry["base_stat"] for entry in payload["stats"]}
+        stats = BaseStats(
+            hp=base["hp"],
+            attack=base["attack"],
+            defense=base["defense"],
+            special_attack=base["special-attack"],
+            special_defense=base["special-defense"],
+            speed=base["speed"],
+        )
+        return Pokemon(pokedex_id=payload["id"], name=payload["name"], types=types, stats=stats)
     except (KeyError, TypeError, ValueError) as error:
         raise PokeApiResponseError(f"Malformed Pokémon payload: {error}") from error
 

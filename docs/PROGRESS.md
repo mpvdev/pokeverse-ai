@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-**Phase 3 — Battle Intelligence** (not started). Phase 2 is complete on branch `phase-2`.
+**Phase 3 — Battle Intelligence** (in progress, branch `phase-3`). Phase 2 is complete on branch `phase-2`.
 
 ## Completed
 
@@ -86,9 +86,26 @@ Deliverable: a multi-agent Pokémon team advisor.
 
 - [x] Step 8: `pokeverse advise` end to end — the Supervisor's optimizer use is now a mode: `never`, `auto` (default; after a successful build, code runs the optimizer only if the team has vulnerabilities, passing the user's required members as `keep`) or `always` (the Step 6 behaviour). `ask_team_builder` takes `keep`; `advise --optimize`; `compare` adds `multi+auto`. Live: multi+auto 4/5 at ~46k tokens (vs multi+opt ~64k); the optimizer was skipped on clean builds. Fire-only failed in that run because the builder's first draft had 3 vulnerabilities; a replay showed auto mode working (2 vulnerabilities → optimizer triggered → Camerupt → Heatran accepted, score (2,6,10,7) → (2,6,6,8), 18k tokens). On that task every multi-agent system has both passed and failed across runs — builder variance dominates; repeated runs are needed to rank them.
 
+## Phase 3 Plan (proposed; revise as we learn)
+
+Deliverable: an AI-assisted battle strategy system. Battle mechanics are deterministic code; agents only choose actions and explain them. Mechanics are deliberately simplified singles: no abilities, items, status conditions or weather; every Pokémon at level 50 with fixed IVs/EVs and a neutral nature.
+
+1. **Base stats in the catalog** — the numbers battles need (HP, attack, defense, special attack, special defense, speed).
+2. **Moves as reference data** — `Move` (type, physical/special/status, power, accuracy, priority, PP) imported from PokéAPI into the catalog, plus a small battle moveset per Pokémon.
+3. **Battle stats and damage** — level-50 stat formula and the damage formula (STAB, type effectiveness, critical hits, random roll) as pure functions with an injectable RNG.
+4. **Battle engine** — immutable battle state, legal actions (move or switch), turn order (priority, then speed), fainting and forced switches; seeded, reproducible battle logs.
+5. **Baseline players and `pokeverse battle`** — random and greedy (highest expected damage) players; simulate team vs team from the CLI.
+6. **Battle Strategy Agent** — an LLM picks actions with tools (legal actions, damage estimates); code validates every choice.
+7. **Opponent Analysis Agent** — threat assessment of an opposing team from deterministic matchups and damage ranges, handed to the strategy agent as verified facts.
+8. **Battle evaluation and feedback** — many seeded battles: agent vs greedy win rate and cost; a Battle Evaluation Agent reviews logs for mistakes, and its feedback is fed into the next run and measured.
+
+### Phase 3 progress
+
+- [x] Step 1: base stats — immutable `BaseStats` (six stats, each 1–255, `total`) is a required part of `Pokemon`; parsed from PokéAPI's `stats` (fixtures now carry real values); `Pokemon.to_dict()` adds `base_stats` (team members omit them via `to_dict(stats=False)`, since team analysis is type-based and stats would only cost tokens). Catalog schema v2 adds a `pokemon_stats` table; v1 databases are upgraded in place, and v1 rows (no stats) count as misses, so they are re-imported on the next online lookup. `pokeverse pokemon` prints a stats line. Trade-off: until re-imported, v1 rows are invisible offline and to `list`.
+
 ## Next Up
 
-- Phase 3 — Battle Intelligence: deterministic battle mechanics, battle strategy agents, simulated battles, opponent analysis, outcome evaluation.
+- Phase 3 Step 2: moves as reference data.
 - Carried over from Phase 2: repeated runs per cell in `compare` before ranking systems; `goal` constraints such as "Fire-only" are enforced only by the model; in `auto` mode, wrong type claims on teams without vulnerabilities are not fact-checked; the Strands spike (re-implement the Supervisor and compare with `pokeverse compare`).
 
 ## Running Locally

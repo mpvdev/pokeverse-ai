@@ -9,14 +9,21 @@ from pokeverse.agents.team_builder import (
     TEAM_BUILDER_MAX_TOOL_ROUNDS,
     TEAM_BUILDER_SYSTEM_PROMPT,
 )
-from pokeverse.catalog import Pokemon, PokemonCatalog, PokemonType, SqlitePokemonRepository
+from pokeverse.catalog import (
+    BaseStats,
+    Pokemon,
+    PokemonCatalog,
+    PokemonType,
+    SqlitePokemonRepository,
+)
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.llm import Completion, LlmRequestError, LlmSettings, OpenAIChat, ToolCall
 
 T = PokemonType
-PIKACHU = Pokemon(25, "pikachu", (T.ELECTRIC,))
-CHARIZARD = Pokemon(6, "charizard", (T.FIRE, T.FLYING))
-BLASTOISE = Pokemon(9, "blastoise", (T.WATER,))
+STATS = BaseStats(80, 80, 80, 80, 80, 80)
+PIKACHU = Pokemon(25, "pikachu", (T.ELECTRIC,), STATS)
+CHARIZARD = Pokemon(6, "charizard", (T.FIRE, T.FLYING), STATS)
+BLASTOISE = Pokemon(9, "blastoise", (T.WATER,), STATS)
 
 
 class ScriptedChat:

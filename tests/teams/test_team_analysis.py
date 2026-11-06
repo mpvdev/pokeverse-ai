@@ -1,11 +1,14 @@
-from pokeverse.catalog import Pokemon, PokemonType
+from pokeverse.catalog import BaseStats, Pokemon, PokemonType
 from pokeverse.teams import Team, analyze_team
 
 T = PokemonType
-CHARIZARD = Pokemon(6, "charizard", (T.FIRE, T.FLYING))
-BLASTOISE = Pokemon(9, "blastoise", (T.WATER,))
-VENUSAUR = Pokemon(3, "venusaur", (T.GRASS, T.POISON))
-GARCHOMP = Pokemon(445, "garchomp", (T.DRAGON, T.GROUND))
+STATS = BaseStats(80, 80, 80, 80, 80, 80)
+CHARIZARD = Pokemon(6, "charizard", (T.FIRE, T.FLYING), STATS)
+BLASTOISE = Pokemon(9, "blastoise", (T.WATER,), STATS)
+VENUSAUR = Pokemon(3, "venusaur", (T.GRASS, T.POISON), STATS)
+GARCHOMP = Pokemon(445, "garchomp", (T.DRAGON, T.GROUND), STATS)
+FLYGON = Pokemon(330, "flygon", (T.GROUND, T.DRAGON), STATS)
+LAPRAS = Pokemon(131, "lapras", (T.WATER, T.ICE), STATS)
 STARTERS = Team((CHARIZARD, BLASTOISE, VENUSAUR))
 
 
@@ -53,8 +56,7 @@ def test_single_weak_member_is_not_a_vulnerability() -> None:
 
 def test_weak_members_must_outnumber_cover() -> None:
     # Ice is 4x on both Dragon/Ground members; Blastoise resists it: 2 weak > 1 cover.
-    flygon = Pokemon(330, "flygon", (T.GROUND, T.DRAGON))
-    analysis = analyze_team(Team((GARCHOMP, flygon, BLASTOISE)))
+    analysis = analyze_team(Team((GARCHOMP, FLYGON, BLASTOISE)))
 
     ice = next(e for e in analysis.vulnerabilities if e.attacking_type is T.ICE)
     assert ice.weak == ("garchomp", "flygon")
@@ -62,17 +64,14 @@ def test_weak_members_must_outnumber_cover() -> None:
 
 
 def test_equal_weak_and_cover_is_not_a_vulnerability() -> None:
-    flygon = Pokemon(330, "flygon", (T.GROUND, T.DRAGON))
-    lapras = Pokemon(131, "lapras", (T.WATER, T.ICE))
-    analysis = analyze_team(Team((GARCHOMP, flygon, BLASTOISE, lapras)))
+    analysis = analyze_team(Team((GARCHOMP, FLYGON, BLASTOISE, LAPRAS)))
 
     assert T.ICE not in [e.attacking_type for e in analysis.vulnerabilities]
 
 
 def test_score_orders_by_vulnerabilities_then_exposure_then_coverage() -> None:
     assert analyze_team(STARTERS).score == (1, 2, 8, 8)
-    flygon = Pokemon(330, "flygon", (T.GROUND, T.DRAGON))
-    worse = analyze_team(Team((GARCHOMP, flygon, BLASTOISE)))
+    worse = analyze_team(Team((GARCHOMP, FLYGON, BLASTOISE)))
     assert worse.score > analyze_team(STARTERS).score
 
 

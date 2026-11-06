@@ -115,6 +115,14 @@ def format_pokemon(pokemon: Pokemon) -> str:
     return f"#{pokemon.pokedex_id:04d} {pokemon.display_name} — {types}"
 
 
+def format_stats(pokemon: Pokemon) -> str:
+    s = pokemon.stats
+    return (
+        f"HP {s.hp} / Atk {s.attack} / Def {s.defense} / SpA {s.special_attack} / "
+        f"SpD {s.special_defense} / Spe {s.speed} (total {s.total})"
+    )
+
+
 def fail(message: str, code: int) -> typer.Exit:
     typer.echo(f"Error: {message}", err=True)
     return typer.Exit(code)
@@ -142,7 +150,11 @@ def pokemon_command(
     except UpstreamUnavailableError as error:
         raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
 
-    typer.echo(json.dumps(pokemon.to_dict()) if as_json else format_pokemon(pokemon))
+    if as_json:
+        typer.echo(json.dumps(pokemon.to_dict()))
+    else:
+        typer.echo(format_pokemon(pokemon))
+        typer.echo(format_stats(pokemon))
 
 
 @app.command("list")
