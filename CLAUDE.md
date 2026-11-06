@@ -649,7 +649,7 @@ See `docs/PROGRESS.md` for detailed progress and next steps.
 
 ## 12. Immediate Next Steps
 
-1. Make type effectiveness a deterministic tool (the live eval run showed the agent getting it wrong from memory).
+1. Phase 2, Step 2: team model and deterministic team analysis (Step 1, type matchups, is done).
 2. Plan Phase 2 — Supervisor Agent and delegation — one step at a time.
 
 Implement Phase 2 one step at a time (see `docs/PROGRESS.md`), handing each step to the developer for review before starting the next.

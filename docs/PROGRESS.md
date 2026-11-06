@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-**Phase 2 — Multi-Agent Trainer System** (not started). Phase 1 is complete on branch `phase-1`.
+**Phase 2 — Multi-Agent Trainer System** (branch `phase-2`). Phase 1 is complete on branch `phase-1`.
 
 ## Completed
 
@@ -51,10 +51,26 @@ Each step is a small change implemented by the assistant and reviewed by the dev
 
 - [x] Step 8: Pokémon Research Agent — `ResearchAgent` (fixed system prompt + catalog tool + `PokedexAnswer` schema) returning a `ResearchResult` with a deterministic grounding check (claimed Pokémon must appear in a successful tool result); `pokeverse.evals` with 7 cases and deterministic checks (expected Pokémon, required facts, tool use, grounding, confidence); `pokeverse research [--json] [--usage]` and `pokeverse eval [--case ID]` (exit 5 on failures). Live baseline on `gpt-5.6-terra`, effort `low`: 7/7 passed, tool use 7/7, 5,692 tokens, ~4.0 s average latency.
 
+## Phase 2 Plan (proposed; revise as we learn)
+
+Deliverable: a multi-agent Pokémon team advisor.
+
+1. **Type matchups as a deterministic tool** — close the Phase 1 gap; team building needs it.
+2. **Team model and validation** — a `Team` domain model (1–6 Pokémon, no duplicates) and deterministic team analysis (shared weaknesses, uncovered types).
+3. **Team Composition Agent** — builds a team from user constraints, as a structured, validated `TeamProposal`.
+4. **Supervisor Agent and delegation** — routes a request to the Research or Team Composition agent (specialists exposed to the supervisor as tools).
+5. **Shared context and handoffs** — one task record passed between agents, with a trace of who did what.
+6. **Team Optimization Agent** — critiques a proposal using team analysis and suggests swaps.
+7. **Evaluation: multi- vs single-agent** — same tasks, compare validity, grounding, tokens and latency.
+8. **`pokeverse advise` CLI** — the Phase 2 deliverable end to end.
+
+### Phase 2 progress
+
+- [x] Step 1: type matchups — hard-coded Gen 6+ chart in `pokeverse.catalog.type_chart` (`effectiveness`, `defensive_profile`), verified row by row against PokéAPI by an opt-in network test; `get_type_matchups` catalog tool; Research Agent prompt forbids computing matchups from memory; grounding also counts Pokémon returned by the matchup tool. Evals: 3 matchup cases with `required_tools`; the unknown-Pokémon case now checks for invented types (`must_not_mention`) instead of self-reported confidence. Live: 10/10 passed, tool use 10/10, 11,746 tokens (~1.2k per question, up from ~0.84k: every request now carries two tool definitions), ~3.8 s average latency. The Phase 1 Gengar question is now answered correctly ("Yes, 2×").
+
 ## Next Up
 
-- Phase 2 — Multi-Agent Trainer System: Supervisor Agent, specialized agents, delegation, shared context, multi- vs single-agent evaluation.
-- Known gap found by the live run: the agent answers type-effectiveness questions from memory and got one wrong (said Ghost/Poison Gengar is not weak to Psychic). Type effectiveness should be a deterministic catalog tool, not LLM recall; add an eval case for it.
+- Phase 2, Step 2: team model and deterministic team analysis.
 
 ## Running Locally
 

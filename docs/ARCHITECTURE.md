@@ -12,7 +12,7 @@ pokeverse-ai/
 │   ├── agents/
 │   │   ├── answers.py     # PokedexAnswer + its strict JSON Schema
 │   │   ├── research.py    # ResearchAgent + ResearchResult (grounding check)
-│   │   └── tools.py       # get_pokemon catalog tool + input normalization
+│   │   └── tools.py       # get_pokemon + get_type_matchups catalog tools, input normalization
 │   ├── evals/
 │   │   └── research.py    # Research Agent eval cases + deterministic checks
 │   └── catalog/
@@ -20,7 +20,8 @@ pokeverse-ai/
 │       ├── models.py      # Pokemon, PokemonType, parse_identifier
 │       ├── pokeapi.py     # PokéAPI HTTP client + payload mapping
 │       ├── repository.py  # SQLite persistence
-│       └── service.py     # Local-first PokemonCatalog
+│       ├── service.py     # Local-first PokemonCatalog
+│       └── type_chart.py  # Gen 6+ type chart, effectiveness, defensive profiles
 │   └── llm/
 │       ├── config.py      # LlmSettings (model id, temperature, max tokens, reasoning effort)
 │       ├── tools.py       # Provider-neutral Tool / ToolCall
@@ -57,8 +58,9 @@ pokeverse-ai/
 | LLM client | `pokeverse.llm` | `OpenAIChat.complete()` sends a Responses API request and returns a `Completion` (text, status, summed token usage, latency, `tool_calls`). With `tools`, it runs a bounded loop (default 5 rounds): execute each `function_call`, send back the model output plus `function_call_output`, repeat until a text reply. Tools are provider-neutral `Tool` objects sent in strict mode. With an `OutputSchema`, the final reply is constrained by a strict `text.format` JSON Schema and parsed into `Completion.data`. Truncated replies (`status=incomplete`) and refusals raise instead of being parsed. Errors mapped to `LlmAuthError`, `LlmUnavailableError`, `LlmRequestError`. |
 | Structured answers | `pokeverse.agents.answers` | `PokedexAnswer` (`answer`, `pokemon` slugs, `confidence` enum) and `POKEDEX_ANSWER_SCHEMA`. The schema constrains generation; `PokedexAnswer.from_dict` re-validates in Python, so model output is never trusted unchecked. |
 | Research Agent | `pokeverse.agents.research` | `ResearchAgent.ask()` combines a fixed system prompt, the catalog tool and the `PokedexAnswer` schema. Returns `ResearchResult` with `looked_up` (names from successful tool calls) and `ungrounded` (claimed Pokémon never confirmed by a lookup) — a deterministic hallucination signal. Depends on a `ChatModel` protocol, not on OpenAI. |
-| Evaluation | `pokeverse.evals` | `RESEARCH_CASES` (fixed questions with expected Pokémon, required facts, whether a lookup is expected, whether high confidence is allowed) and `check()`; `run_case()` records model misbehaviour as a case failure while auth/outage errors abort the run. Live runs only (no recorded model responses). |
-| Catalog tools | `pokeverse.agents.tools` | `make_catalog_tools(catalog)` returns the read-only `get_pokemon` tool. Normalizes model input (`"Mr. Mime"` → `mr-mime`, `"#025"` → 25), returns `Pokemon.to_dict()`, and reports catalog failures as `{"error", "message"}` data so the model can explain them. |
+| Evaluation | `pokeverse.evals` | `RESEARCH_CASES` (fixed questions with expected Pokémon, required facts, whether a lookup is expected, tools that must be called, words that must not appear) and `check()`; `run_case()` records model misbehaviour as a case failure while auth/outage errors abort the run. Live runs only (no recorded model responses). |
+| Catalog tools | `pokeverse.agents.tools` | `make_catalog_tools(catalog)` returns two read-only tools: `get_pokemon` (returns `Pokemon.to_dict()`) and `get_type_matchups` (the Pokémon plus `weak_to` / `resists` / `immune_to` multipliers from the type chart). Both normalize model input (`"Mr. Mime"` → `mr-mime`, `"#025"` → 25) and report catalog failures as `{"error", "message"}` data so the model can explain them. |
+| Type chart | `pokeverse.catalog.type_chart` | Deterministic Gen 6+ type effectiveness: `TYPE_CHART` (non-1× entries only), `effectiveness(attacking, defending_types)`, `defensive_profile(types)`. Hard-coded reference data, checked against PokéAPI by an opt-in network test. |
 
 ### Runtime
 

@@ -1,12 +1,15 @@
 """Evaluation of the Research Agent against a fixed set of questions."""
 
+import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from pokeverse.agents.answers import Confidence
 from pokeverse.agents.research import ResearchAgent, ResearchResult
+from pokeverse.catalog import PokemonType
 from pokeverse.llm import LlmRequestError
+
+ALL_TYPES = tuple(member.value for member in PokemonType)
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,7 +20,9 @@ class EvalCase:
     must_mention: tuple[str, ...] = ()
     # True: the agent must call a tool; False: it must not.
     expect_lookup: bool = True
-    allow_high_confidence: bool = True
+    required_tools: tuple[str, ...] = ()
+    # Whole words that would indicate an invented fact.
+    must_not_mention: tuple[str, ...] = ()
 
 
 RESEARCH_CASES: tuple[EvalCase, ...] = (
@@ -45,13 +50,34 @@ RESEARCH_CASES: tuple[EvalCase, ...] = (
         "unknown-pokemon",
         "What type is Missingno?",
         frozenset(),
-        allow_high_confidence=False,
+        must_not_mention=ALL_TYPES,
     ),
     EvalCase(
         "off-topic",
         "What is the capital of France?",
         frozenset(),
         expect_lookup=False,
+    ),
+    EvalCase(
+        "gengar-vs-psychic",
+        "Is Gengar weak to Psychic-type moves?",
+        frozenset({"gengar"}),
+        ("psychic",),
+        required_tools=("get_type_matchups",),
+    ),
+    EvalCase(
+        "gengar-weaknesses",
+        "List all of Gengar's weaknesses.",
+        frozenset({"gengar"}),
+        ("ground", "psychic", "ghost", "dark"),
+        required_tools=("get_type_matchups",),
+    ),
+    EvalCase(
+        "electric-vs-garchomp",
+        "Can Electric-type moves hurt Garchomp?",
+        frozenset({"garchomp"}),
+        ("immune",),
+        required_tools=("get_type_matchups",),
     ),
 )
 
@@ -80,6 +106,10 @@ def check(case: EvalCase, result: ResearchResult) -> tuple[str, ...]:
     called = bool(result.completion.tool_calls)
     if called != case.expect_lookup:
         failures.append(f"expected lookup={case.expect_lookup}, got {called}")
+    used = {call.name for call in result.completion.tool_calls}
+    unused = [tool for tool in case.required_tools if tool not in used]
+    if unused:
+        failures.append(f"did not call {unused}")
     if set(result.answer.pokemon) != case.expected_pokemon:
         failures.append(
             f"pokemon {sorted(result.answer.pokemon)} != expected {sorted(case.expected_pokemon)}"
@@ -90,8 +120,9 @@ def check(case: EvalCase, result: ResearchResult) -> tuple[str, ...]:
         failures.append(f"answer does not mention {missing}")
     if result.ungrounded:
         failures.append(f"ungrounded pokemon {list(result.ungrounded)}")
-    if not case.allow_high_confidence and result.answer.confidence is Confidence.HIGH:
-        failures.append("confidence should not be high")
+    invented = [word for word in case.must_not_mention if re.search(rf"\b{word}\b", text)]
+    if invented:
+        failures.append(f"answer mentions {invented}")
     return tuple(failures)
 
 

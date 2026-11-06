@@ -3,7 +3,13 @@
 import re
 from typing import Any
 
-from pokeverse.catalog import PokemonCatalog, PokemonNotInCatalogError, UpstreamUnavailableError
+from pokeverse.catalog import (
+    Pokemon,
+    PokemonCatalog,
+    PokemonNotInCatalogError,
+    UpstreamUnavailableError,
+)
+from pokeverse.catalog.type_chart import defensive_profile
 from pokeverse.llm import Tool
 
 _APOSTROPHES = re.compile(r"['’]")
@@ -35,15 +41,26 @@ def normalize_pokemon_identifier(raw: str) -> str | int:
 
 
 def make_catalog_tools(catalog: PokemonCatalog) -> tuple[Tool, ...]:
-    def get_pokemon(name_or_id: str) -> dict[str, Any]:
+    def lookup(name_or_id: str) -> Pokemon | dict[str, Any]:
+        """The Pokémon, or an error object the model can explain."""
         try:
-            return catalog.get(normalize_pokemon_identifier(name_or_id)).to_dict()
+            return catalog.get(normalize_pokemon_identifier(name_or_id))
         except ValueError as error:
             return {"error": "invalid_identifier", "message": str(error)}
         except PokemonNotInCatalogError as error:
             return {"error": "not_found", "message": str(error)}
         except UpstreamUnavailableError as error:
             return {"error": "unavailable", "message": str(error)}
+
+    def get_pokemon(name_or_id: str) -> dict[str, Any]:
+        found = lookup(name_or_id)
+        return found.to_dict() if isinstance(found, Pokemon) else found
+
+    def get_type_matchups(name_or_id: str) -> dict[str, Any]:
+        found = lookup(name_or_id)
+        if not isinstance(found, Pokemon):
+            return found
+        return {"pokemon": found.to_dict(), **defensive_profile(found.types)}
 
     return (
         Tool(
@@ -56,5 +73,18 @@ def make_catalog_tools(catalog: PokemonCatalog) -> tuple[Tool, ...]:
             ),
             parameters=GET_POKEMON_PARAMETERS,
             handler=get_pokemon,
+        ),
+        Tool(
+            name="get_type_matchups",
+            description=(
+                "Compute how attacking move types affect a Pokémon, using the official type "
+                "chart (Generation 6+). Returns the Pokémon plus `weak_to`, `resists` and "
+                "`immune_to`, each mapping attacking type to its damage multiplier (types not "
+                "listed deal 1x). Use it for any question about weaknesses, resistances, "
+                "immunities or whether a move type is effective; never work these out from "
+                "memory."
+            ),
+            parameters=GET_POKEMON_PARAMETERS,
+            handler=get_type_matchups,
         ),
     )

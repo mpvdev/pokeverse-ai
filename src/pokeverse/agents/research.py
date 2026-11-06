@@ -13,6 +13,8 @@ RESEARCH_SYSTEM_PROMPT = (
     "You are the PokéVerse Research Agent, an expert on Pokémon. "
     "Before stating any Pokémon's types or Pokédex number, look it up with get_pokemon; "
     "never answer those facts from memory. "
+    "For weaknesses, resistances, immunities or whether a move type is effective, call "
+    "get_type_matchups and report its multipliers; never work out type effectiveness yourself. "
     "If a lookup returns an error, say which fact could not be verified. "
     "In `pokemon`, list every Pokémon your answer is about, using the canonical name "
     "returned by the tool. "
@@ -42,11 +44,13 @@ class ResearchResult:
     @property
     def looked_up(self) -> frozenset[str]:
         """Canonical names returned by successful tool calls."""
-        return frozenset(
-            call.output["name"]
-            for call in self.completion.tool_calls
-            if isinstance(call.output.get("name"), str)
-        )
+        names = set()
+        for call in self.completion.tool_calls:
+            # get_pokemon returns the Pokémon itself; get_type_matchups nests it.
+            record = call.output.get("pokemon", call.output)
+            if isinstance(record, dict) and isinstance(record.get("name"), str):
+                names.add(record["name"])
+        return frozenset(names)
 
     @property
     def ungrounded(self) -> tuple[str, ...]:

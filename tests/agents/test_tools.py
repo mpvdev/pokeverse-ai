@@ -26,9 +26,13 @@ def repository() -> Iterator[SqlitePokemonRepository]:
         yield repo
 
 
+def call_tool(catalog: PokemonCatalog, name: str, name_or_id: str) -> dict[str, object]:
+    tools = {tool.name: tool for tool in make_catalog_tools(catalog)}
+    return tools[name].handler(name_or_id=name_or_id)
+
+
 def get_pokemon(catalog: PokemonCatalog, name_or_id: str) -> dict[str, object]:
-    (tool,) = make_catalog_tools(catalog)
-    return tool.handler(name_or_id=name_or_id)
+    return call_tool(catalog, "get_pokemon", name_or_id)
 
 
 @pytest.mark.parametrize(
@@ -53,6 +57,7 @@ def test_get_pokemon_returns_canonical_json(repository: SqlitePokemonRepository)
     assert get_pokemon(catalog, "122") == MR_MIME.to_dict()
 
 
+@pytest.mark.parametrize("tool_name", ["get_pokemon", "get_type_matchups"])
 @pytest.mark.parametrize(
     ("name_or_id", "source", "error"),
     [
@@ -62,19 +67,33 @@ def test_get_pokemon_returns_canonical_json(repository: SqlitePokemonRepository)
         ("0", None, "invalid_identifier"),
     ],
 )
-def test_get_pokemon_returns_errors_as_data(
-    repository: SqlitePokemonRepository, name_or_id: str, source: object, error: str
+def test_tools_return_errors_as_data(
+    repository: SqlitePokemonRepository,
+    tool_name: str,
+    name_or_id: str,
+    source: object,
+    error: str,
 ) -> None:
     catalog = PokemonCatalog(repository, source)  # type: ignore[arg-type]
 
-    result = get_pokemon(catalog, name_or_id)
+    result = call_tool(catalog, tool_name, name_or_id)
 
     assert result["error"] == error
     assert result["message"]
 
 
-def test_schema_is_strict_mode_compatible(repository: SqlitePokemonRepository) -> None:
-    (tool,) = make_catalog_tools(PokemonCatalog(repository))
+def test_get_type_matchups_computes_defensive_profile(
+    repository: SqlitePokemonRepository,
+) -> None:
+    result = call_tool(PokemonCatalog(repository), "get_type_matchups", "Mr. Mime")
 
-    assert tool.parameters["additionalProperties"] is False
-    assert set(tool.parameters["required"]) == set(tool.parameters["properties"])
+    assert result["pokemon"] == MR_MIME.to_dict()
+    assert result["weak_to"] == {"poison": 2, "ghost": 2, "steel": 2}
+    assert result["immune_to"] == {"dragon": 0}
+    assert result["resists"] == {"fighting": 0.25, "psychic": 0.5}
+
+
+def test_schemas_are_strict_mode_compatible(repository: SqlitePokemonRepository) -> None:
+    for tool in make_catalog_tools(PokemonCatalog(repository)):
+        assert tool.parameters["additionalProperties"] is False
+        assert set(tool.parameters["required"]) == set(tool.parameters["properties"])

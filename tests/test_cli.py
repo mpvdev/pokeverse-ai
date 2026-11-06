@@ -274,14 +274,16 @@ def test_ask_usage_goes_to_stderr(fake_chat: type[FakeChat]) -> None:
     assert "latency=42ms" in result.stderr
 
 
-def test_ask_gives_model_the_catalog_tool(fake_chat: type[FakeChat], upstream: Upstream) -> None:
+def test_ask_gives_model_the_catalog_tools(fake_chat: type[FakeChat], upstream: Upstream) -> None:
     result = runner.invoke(app, ["ask", "What type is Pikachu?", "--usage"])
 
     assert result.exit_code == 0
-    (tool,) = fake_chat.calls[0]["tools"]  # type: ignore[misc]
-    assert tool.name == "get_pokemon"
+    tools = fake_chat.calls[0]["tools"]
+    assert [tool.name for tool in tools] == ["get_pokemon", "get_type_matchups"]  # type: ignore[attr-defined]
+    # The second lookup is served from the local catalog.
     assert upstream.requests == ["/api/v2/pokemon/pikachu"]
     assert '[tool] get_pokemon({"name_or_id": "Pikachu"}) -> {"pokedex_id": 25' in result.stderr
+    assert '"weak_to": {"ground": 2.0}' in result.stderr
 
 
 def test_ask_without_tools(fake_chat: type[FakeChat], upstream: Upstream) -> None:
