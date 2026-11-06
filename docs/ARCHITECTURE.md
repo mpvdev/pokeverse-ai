@@ -11,6 +11,7 @@ pokeverse-ai/
 │   ├── cli.py             # Typer app; `pokeverse` console script
 │   ├── agents/
 │   │   ├── answers.py     # PokedexAnswer + its strict JSON Schema
+│   │   ├── context.py     # SharedContext: verified facts handed between agents
 │   │   ├── research.py    # ResearchAgent + ResearchResult (grounding check)
 │   │   ├── supervisor.py  # Supervisor: specialists as tools, Delegation trace
 │   │   ├── team_builder.py  # TeamCompositionAgent, TeamProposal, TeamBuildResult
@@ -60,7 +61,7 @@ pokeverse-ai/
 | PokéAPI client | `pokeverse.catalog.pokeapi` | Fetches a Pokémon by name/id, maps the payload to `Pokemon`, and translates HTTP/network failures into typed `PokeApiError` subclasses. Import-only; not a runtime dependency. |
 | Repository | `pokeverse.catalog.repository` | `SqlitePokemonRepository`: tables `pokemon` and `pokemon_type` (slot-ordered), schema version in `PRAGMA user_version`, atomic upserts. |
 | Catalog service | `pokeverse.catalog.service` | `PokemonCatalog`: reads locally first; on a miss imports via a `PokemonSource` (e.g. `PokeApiClient`) and stores the result. Raises `PokemonNotInCatalogError` or `UpstreamUnavailableError`; cached data never depends on upstream. |
-| LLM client | `pokeverse.llm` | `OpenAIChat.complete()` sends a Responses API request and returns a `Completion` (text, status, summed token usage, latency, `tool_calls`). With `tools`, it runs a bounded loop (default 5 rounds): execute each `function_call`, send back the model output plus `function_call_output`, repeat until a text reply. Tools are provider-neutral `Tool` objects sent in strict mode. With an `OutputSchema`, the final reply is constrained by a strict `text.format` JSON Schema and parsed into `Completion.data`. Truncated replies (`status=incomplete`) and refusals raise instead of being parsed. Errors mapped to `LlmAuthError`, `LlmUnavailableError`, `LlmRequestError`. |
+| LLM client | `pokeverse.llm` | `OpenAIChat.complete()` sends a Responses API request and returns a `Completion` (text, status, summed token usage, latency, `tool_calls`). With `tools`, it runs a bounded loop (default 5 rounds): execute each `function_call`, send back the model output plus `function_call_output`, repeat until a text reply. Tools are provider-neutral `Tool` objects sent in strict mode. With an `OutputSchema`, the final reply is constrained by a strict `text.format` JSON Schema and parsed into `Completion.data`. Truncated replies (`status=incomplete`) and refusals raise instead of being parsed. Errors mapped to `LlmAuthError`, `LlmUnavailableError`, `LlmRequestError`; an `LlmRequestError` raised after work began carries the partial `Completion` (usage and tool calls so far). |
 | Structured answers | `pokeverse.agents.answers` | `PokedexAnswer` (`answer`, `pokemon` slugs, `confidence` enum) and `POKEDEX_ANSWER_SCHEMA`. The schema constrains generation; `PokedexAnswer.from_dict` re-validates in Python, so model output is never trusted unchecked. |
 | Research Agent | `pokeverse.agents.research` | `ResearchAgent.ask()` combines a fixed system prompt, the catalog tool and the `PokedexAnswer` schema. Returns `ResearchResult` with `looked_up` (names from successful tool calls) and `ungrounded` (claimed Pokémon never confirmed by a lookup) — a deterministic hallucination signal. Depends on a `ChatModel` protocol, not on OpenAI. |
 | Evaluation | `pokeverse.evals` | `RESEARCH_CASES` (fixed questions with expected Pokémon, required facts, whether a lookup is expected, tools that must be called, words that must not appear) and `check()`; `run_case()` records model misbehaviour as a case failure while auth/outage errors abort the run. Live runs only (no recorded model responses). |
@@ -69,13 +70,19 @@ pokeverse-ai/
 | Teams | `pokeverse.teams` | Application state, separate from reference data. `Team`: immutable 1–6 Pokémon; the same species may repeat, and each copy counts as a separate member in the analysis. `analyze_team(team)` → `TeamAnalysis`: per-attacking-type exposure (weak / resists / immune members), `vulnerabilities` (≥2 weak and weak outnumber cover), `unresisted` types, and STAB-only `offensive_gaps`. Pure code over the type chart; agents will read it rather than judge teams themselves. |
 | Team Composition Agent | `pokeverse.agents.team_builder` | `TeamCompositionAgent.build(request)`: free-text request → `TeamProposal` (members with roles, summary) using `get_pokemon`, `get_type_matchups` and `analyze_team` (from `make_team_tools`), with a larger tool-round and token budget than research. The result (`TeamBuildResult`) is re-checked by code: members resolved through the catalog (invented Pokémon rejected), analysis recomputed, and `self_checked` reports whether the agent analyzed exactly the final team. |
 | Supervisor | `pokeverse.agents.supervisor` | `Supervisor.run(request)`: an LLM whose tools are the specialist agents (`ask_research_agent`, `ask_team_builder`, each taking a self-contained `task`). It never answers Pokémon facts itself and composes its answer from specialist results. Each tool call runs the real specialist (with its own prompt, tools and validation) and returns its `to_dict()`; specialist failures come back as error data. `SupervisorResult` holds the answer, the observed `Delegation` trace and the supervisor/specialist token split. |
+| Shared context | `pokeverse.agents.context` | `SharedContext`, one per supervised request: records verified facts from specialists' tool outputs only (never model prose) and renders them as a "Verified facts" block appended to the next specialist's task. Each `Delegation` records its `handoff`; Pokémon handed over count as grounded for the Research Agent. |
 
-### Multi-agent flow (Phase 2, Step 4)
+### Multi-agent flow (Phase 2, Steps 4–5)
 
 ```text
 user request ──> Supervisor (LLM) ── ask_research_agent(task) ──> ResearchAgent ──> catalog tools
+                      │                      │ tool outputs
+                      │                      v
+                      │               SharedContext (verified facts)
+                      │                      │ "Verified facts" block
+                      │                      v
                       │          └─ ask_team_builder(task) ────> TeamCompositionAgent ──> catalog + analyze_team
-                      └──> answer composed from specialist results (+ Delegation trace, token split)
+                      └──> answer composed from specialist results (+ Delegation trace, handoffs, token split)
 ```
 
 ### Runtime

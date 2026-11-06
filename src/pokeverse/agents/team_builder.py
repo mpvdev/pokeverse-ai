@@ -14,7 +14,11 @@ from pokeverse.teams import MAX_TEAM_SIZE, Team, TeamAnalysis, analyze_team
 TEAM_BUILDER_SYSTEM_PROMPT = (
     "You are the PokéVerse Team Composition Agent. Build a Pokémon team that satisfies the "
     "user's request. Unless the request says otherwise, propose 6 members. "
-    "Use get_pokemon to confirm a Pokémon exists and check its types; never assume types. "
+    "analyze_team looks up every member itself, returns their types and reports names it "
+    "cannot find, so try candidate teams with it directly; use get_pokemon only when you need "
+    "one Pokémon's types before choosing. Never assume types. "
+    "Facts listed under 'Verified facts' come from the same catalog and type chart; use them "
+    "instead of looking them up again. "
     "Before answering, call analyze_team on your final team. If it reports vulnerabilities, "
     "swap members to remove them where the request allows, and analyze again. "
     "Use canonical names as returned by the tools. In `summary`, explain the team's plan and "
@@ -149,13 +153,15 @@ class TeamCompositionAgent:
         try:
             proposal = TeamProposal.from_dict(completion.data or {})
         except ValueError as error:
-            raise LlmRequestError(f"Model reply failed validation: {error}") from error
+            raise LlmRequestError(
+                f"Model reply failed validation: {error}", completion=completion
+            ) from error
         try:
             members = tuple(
                 self._catalog.get(normalize_pokemon_identifier(m.name)) for m in proposal.members
             )
         except PokemonNotInCatalogError as error:
             raise LlmRequestError(
-                f"Agent proposed a Pokémon that does not exist: {error}"
+                f"Agent proposed a Pokémon that does not exist: {error}", completion=completion
             ) from error
         return TeamBuildResult(proposal, analyze_team(Team(members)), completion)

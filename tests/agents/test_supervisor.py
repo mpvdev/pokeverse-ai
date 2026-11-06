@@ -43,7 +43,7 @@ class RoutingChat:
             return Completion("", "fake", "completed", 30, 10, 5, (lookup,), self.research)
         assert system == TEAM_BUILDER_SYSTEM_PROMPT
         analyzed = ToolCall(
-            "analyze_team", {"names": ["pikachu"]}, {"team": {"members": [{"name": "pikachu"}]}}
+            "analyze_team", {"names": ["pikachu"]}, {"team": {"members": [PIKACHU.to_dict()]}}
         )
         return Completion("", "fake", "completed", 200, 50, 5, (analyzed,), TEAM)
 
@@ -94,6 +94,41 @@ def test_both_specialists_and_token_accounting(catalog: PokemonCatalog) -> None:
     }
 
 
+def test_verified_facts_are_handed_to_the_next_specialist(catalog: PokemonCatalog) -> None:
+    chat = RoutingChat(
+        [("ask_research_agent", "Pikachu's type?"), ("ask_team_builder", "Team around Pikachu")]
+    )
+
+    result = Supervisor(chat, catalog).run("q")
+
+    research, team_builder = result.delegations
+    assert research.handoff == ()
+    assert team_builder.handoff == ("pikachu",)
+    assert team_builder.task == "Team around Pikachu"
+    team_prompt = chat.prompts[2][1]
+    assert team_prompt.startswith("Team around Pikachu\n\nVerified facts")
+    assert "- pikachu (#25): electric" in team_prompt
+    assert result.to_dict()["context"]["pokemon"] == [PIKACHU.to_dict()]
+
+
+def test_handed_over_facts_count_as_grounded(catalog: PokemonCatalog) -> None:
+    class NoLookupResearchChat(RoutingChat):
+        def complete(self, prompt: str, **kwargs: Any) -> Completion:
+            completion = super().complete(prompt, **kwargs)
+            if kwargs["system"] == RESEARCH_SYSTEM_PROMPT and len(self.prompts) > 2:
+                return Completion("", "fake", "completed", 30, 10, 5, (), GOOD_ANSWER)
+            return completion
+
+    chat = NoLookupResearchChat([("ask_research_agent", "a"), ("ask_research_agent", "b")])
+
+    result = Supervisor(chat, catalog).run("q")
+
+    second = result.delegations[1]
+    assert second.handoff == ("pikachu",)
+    assert second.completion is not None and second.completion.tool_calls == ()
+    assert second.output is not None and second.output["ungrounded"] == []
+
+
 def test_specialist_failure_is_returned_to_supervisor_as_data(catalog: PokemonCatalog) -> None:
     bad = {"answer": "x", "pokemon": ["Not A Slug"], "confidence": "high"}
     chat = RoutingChat([("ask_research_agent", "q")], research=bad)
@@ -104,7 +139,7 @@ def test_specialist_failure_is_returned_to_supervisor_as_data(catalog: PokemonCa
     assert delegation.output is None
     assert "failed validation" in delegation.error
     assert delegation.to_dict()["error"] == delegation.error
-    assert delegation.tokens == 0
+    assert delegation.tokens == 40
 
 
 def test_empty_supervisor_answer_raises(catalog: PokemonCatalog) -> None:

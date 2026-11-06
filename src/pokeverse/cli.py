@@ -254,8 +254,9 @@ def advise_command(
     if show_usage:
         for delegation in result.delegations:
             outcome = f"error: {delegation.error}" if delegation.error else "ok"
+            handoff = f" (handoff: {', '.join(delegation.handoff)})" if delegation.handoff else ""
             typer.echo(
-                f"[delegate] {delegation.agent}: {delegation.task!r} -> {outcome} "
+                f"[delegate] {delegation.agent}: {delegation.task!r}{handoff} -> {outcome} "
                 f"({delegation.tokens} tokens)",
                 err=True,
             )

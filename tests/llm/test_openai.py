@@ -231,10 +231,14 @@ def test_tool_loop_is_bounded() -> None:
     client = FakeClient(*[openai_response("", output=[function_call()]) for _ in range(3)])
     chat = OpenAIChat(SETTINGS, client=client)
 
-    with pytest.raises(LlmRequestError, match="2 rounds"):
+    with pytest.raises(LlmRequestError, match="2 rounds") as raised:
         chat.complete("Loop forever", tools=[pokemon_tool()], max_tool_rounds=2)
 
     assert len(client.responses.requests) == 3
+    partial = raised.value.completion
+    assert partial is not None
+    assert (partial.input_tokens, partial.output_tokens) == (36, 21)
+    assert len(partial.tool_calls) == 3
 
 
 def test_invalid_tool_arguments_raise_request_error() -> None:

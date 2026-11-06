@@ -1,9 +1,10 @@
 """The Supervisor Agent: routes a request to specialist agents exposed as tools."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
+from pokeverse.agents.context import SharedContext, with_context
 from pokeverse.agents.research import ChatModel, ResearchAgent
 from pokeverse.agents.team_builder import TeamCompositionAgent
 from pokeverse.catalog import PokemonCatalog
@@ -16,7 +17,10 @@ SUPERVISOR_SYSTEM_PROMPT = (
     "weaknesses, resistances and type matchups. "
     "Use ask_team_builder to build or propose a team. "
     "Specialists cannot see the user's message: give each one a complete, self-contained task "
-    "with every constraint the user stated. If a request needs both, call both. "
+    "with every constraint the user stated, and do not add requirements the user did not ask "
+    "for. If a request needs both, call both, and split it: give the Research Agent only the "
+    "factual question and the Team Composition Agent only the team request. Facts found by one "
+    "specialist are passed to the next automatically, so you do not need to repeat them. "
     "Base your final answer only on specialist results; if a specialist reports an error, "
     "ungrounded claims or a team it did not check, say so. "
     "If the request is not about Pokémon, briefly say what PokéVerse can help with and do not "
@@ -46,6 +50,8 @@ class Delegation:
     output: dict[str, Any] | None = None
     error: str | None = None
     completion: Completion | None = None
+    # Pokémon whose verified facts were handed to this specialist with its task.
+    handoff: tuple[str, ...] = ()
 
     @property
     def tokens(self) -> int:
@@ -53,7 +59,13 @@ class Delegation:
 
     def to_dict(self) -> dict[str, Any]:
         result = {"output": self.output} if self.error is None else {"error": self.error}
-        return {"agent": self.agent, "task": self.task, **result, "tokens": self.tokens}
+        return {
+            "agent": self.agent,
+            "task": self.task,
+            "handoff": list(self.handoff),
+            **result,
+            "tokens": self.tokens,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +73,7 @@ class SupervisorResult:
     answer: str
     delegations: tuple[Delegation, ...]
     completion: Completion
+    context: SharedContext = field(default_factory=SharedContext)
 
     @property
     def specialist_tokens(self) -> int:
@@ -74,6 +87,7 @@ class SupervisorResult:
         return {
             "answer": self.answer,
             "delegations": [delegation.to_dict() for delegation in self.delegations],
+            "context": self.context.to_dict(),
             "usage": {
                 "supervisor_tokens": self.completion.total_tokens,
                 "specialist_tokens": self.specialist_tokens,
@@ -92,15 +106,29 @@ class Supervisor:
 
     def run(self, request: str) -> SupervisorResult:
         delegations: list[Delegation] = []
+        context = SharedContext()
 
-        def delegate(agent: str, task: str, work: Callable[[], Any]) -> dict[str, Any]:
+        def delegate(
+            agent: str, task: str, work: Callable[[str, frozenset[str]], Any]
+        ) -> dict[str, Any]:
+            handoff = context.names
             try:
-                result = work()
-            except (LlmRequestError, ValueError) as error:
-                delegations.append(Delegation(agent, task, error=str(error)))
+                result = work(with_context(task, context), frozenset(handoff))
+            except LlmRequestError as error:
+                delegations.append(
+                    Delegation(
+                        agent, task, error=str(error), completion=error.completion, handoff=handoff
+                    )
+                )
                 return {"error": "specialist_failed", "message": str(error)}
+            except ValueError as error:
+                delegations.append(Delegation(agent, task, error=str(error), handoff=handoff))
+                return {"error": "specialist_failed", "message": str(error)}
+            context.record(result.completion.tool_calls)
             output = result.to_dict()
-            delegations.append(Delegation(agent, task, output, completion=result.completion))
+            delegations.append(
+                Delegation(agent, task, output, completion=result.completion, handoff=handoff)
+            )
             return output
 
         tools = (
@@ -112,7 +140,11 @@ class Supervisor:
                     "verify), or an error object."
                 ),
                 parameters=TASK_PARAMETERS,
-                handler=lambda task: delegate("research", task, lambda: self._research.ask(task)),
+                handler=lambda task: delegate(
+                    "research",
+                    task,
+                    lambda prompt, verified: self._research.ask(prompt, verified=verified),
+                ),
             ),
             Tool(
                 name="ask_team_builder",
@@ -123,7 +155,7 @@ class Supervisor:
                 ),
                 parameters=TASK_PARAMETERS,
                 handler=lambda task: delegate(
-                    "team_builder", task, lambda: self._team_builder.build(task)
+                    "team_builder", task, lambda prompt, _: self._team_builder.build(prompt)
                 ),
             ),
         )
@@ -135,4 +167,4 @@ class Supervisor:
         )
         if not completion.text.strip():
             raise LlmRequestError("Supervisor returned an empty answer")
-        return SupervisorResult(completion.text, tuple(delegations), completion)
+        return SupervisorResult(completion.text, tuple(delegations), completion, context)
