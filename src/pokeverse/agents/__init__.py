@@ -13,7 +13,7 @@ from pokeverse.agents.team_builder import (
 from pokeverse.agents.tools import (
     make_catalog_tools,
     make_team_tools,
-    normalize_pokemon_identifier,
+    normalize_identifier,
 )
 
 __all__ = [
@@ -34,5 +34,5 @@ __all__ = [
     "TeamProposal",
     "make_catalog_tools",
     "make_team_tools",
-    "normalize_pokemon_identifier",
+    "normalize_identifier",
 ]

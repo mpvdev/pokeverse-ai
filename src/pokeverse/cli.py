@@ -20,10 +20,12 @@ from pokeverse.agents import (
     TeamCompositionAgent,
     TeamOptimizationAgent,
     make_catalog_tools,
-    normalize_pokemon_identifier,
+    normalize_identifier,
 )
 from pokeverse.agents.supervisor import OptimizeMode
 from pokeverse.catalog import (
+    Move,
+    MoveNotInCatalogError,
     Pokemon,
     PokemonCatalog,
     PokemonNotInCatalogError,
@@ -105,11 +107,6 @@ def open_catalog(settings: Settings, *, offline: bool) -> Iterator[PokemonCatalo
             yield PokemonCatalog(repository, client)
 
 
-def parse_cli_identifier(raw: str) -> str | int:
-    stripped = raw.strip()
-    return int(stripped) if stripped.isdigit() else stripped
-
-
 def format_pokemon(pokemon: Pokemon) -> str:
     types = " / ".join(pokemon_type.value.title() for pokemon_type in pokemon.types)
     return f"#{pokemon.pokedex_id:04d} {pokemon.display_name} — {types}"
@@ -120,6 +117,17 @@ def format_stats(pokemon: Pokemon) -> str:
     return (
         f"HP {s.hp} / Atk {s.attack} / Def {s.defense} / SpA {s.special_attack} / "
         f"SpD {s.special_defense} / Spe {s.speed} (total {s.total})"
+    )
+
+
+def format_move(move: Move) -> str:
+    power = move.power if move.power is not None else "—"
+    accuracy = f"{move.accuracy}%" if move.accuracy is not None else "never misses"
+    priority = f"{move.priority:+d}" if move.priority else "0"
+    return (
+        f"#{move.move_id:04d} {move.display_name} — {move.type.value.title()}, "
+        f"{move.damage_class.value}, power {power}, accuracy {accuracy}, "
+        f"priority {priority}, PP {move.pp}"
     )
 
 
@@ -140,7 +148,7 @@ def pokemon_command(
     """Look up a Pokémon, importing it from PokéAPI if not stored locally."""
     settings: Settings = ctx.obj
     try:
-        identifier = parse_cli_identifier(name_or_id)
+        identifier = normalize_identifier(name_or_id)
         with open_catalog(settings, offline=offline) as catalog:
             pokemon = catalog.get(identifier)
     except ValueError as error:
@@ -176,6 +184,31 @@ def list_command(
             typer.echo(format_pokemon(pokemon))
 
 
+@app.command("move")
+def move_command(
+    ctx: typer.Context,
+    name_or_id: Annotated[str, typer.Argument(help="Move name (e.g. 'Swords Dance') or id.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Look up a move, importing it from PokéAPI if not stored locally."""
+    settings: Settings = ctx.obj
+    try:
+        identifier = normalize_identifier(name_or_id)
+        with open_catalog(settings, offline=offline) as catalog:
+            move = catalog.get_move(identifier)
+    except ValueError as error:
+        raise fail(str(error), EXIT_INVALID_INPUT) from error
+    except MoveNotInCatalogError as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+    except UpstreamUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+
+    typer.echo(json.dumps(move.to_dict()) if as_json else format_move(move))
+
+
 @app.command("team")
 def team_command(
     ctx: typer.Context,
@@ -193,7 +226,7 @@ def team_command(
         raise fail(f"a team can have at most {MAX_TEAM_SIZE} Pokémon", EXIT_INVALID_INPUT)
     try:
         with open_catalog(settings, offline=offline) as catalog:
-            members = tuple(catalog.get(normalize_pokemon_identifier(name)) for name in names)
+            members = tuple(catalog.get(normalize_identifier(name)) for name in names)
         analysis = analyze_team(Team(members))
     except ValueError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
@@ -274,7 +307,7 @@ def optimize_command(
         with llm_errors():
             chat = OpenAIChat(LlmSettings.from_env())
             with open_catalog(settings, offline=False) as catalog:
-                team = Team(tuple(catalog.get(normalize_pokemon_identifier(n)) for n in names))
+                team = Team(tuple(catalog.get(normalize_identifier(n)) for n in names))
                 result = TeamOptimizationAgent(chat, catalog).optimize(
                     team, goal=goal, keep=keep or (), notes=notes
                 )

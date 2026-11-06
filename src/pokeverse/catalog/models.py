@@ -14,6 +14,19 @@ MAX_TYPES = 2
 MIN_BASE_STAT = 1
 MAX_BASE_STAT = 255
 
+# Ranges of real move data (Explosion has 250 power; Trick Room has -7 priority).
+MAX_MOVE_POWER = 250
+MIN_PRIORITY = -7
+MAX_PRIORITY = 5
+MAX_PP = 40
+
+
+def _check_range(name: str, value: object, low: int, high: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    if not low <= value <= high:
+        raise ValueError(f"{name} must be between {low} and {high}")
+
 
 class PokemonType(StrEnum):
     """The 18 elemental types. Values match PokéAPI type names."""
@@ -51,11 +64,7 @@ class BaseStats:
 
     def __post_init__(self) -> None:
         for stat in fields(self):
-            value = getattr(self, stat.name)
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise ValueError(f"{stat.name} must be an integer")
-            if not MIN_BASE_STAT <= value <= MAX_BASE_STAT:
-                raise ValueError(f"{stat.name} must be between {MIN_BASE_STAT} and {MAX_BASE_STAT}")
+            _check_range(stat.name, getattr(self, stat.name), MIN_BASE_STAT, MAX_BASE_STAT)
 
     @property
     def total(self) -> int:
@@ -118,6 +127,68 @@ class Pokemon:
         if stats:
             data["base_stats"] = self.stats.to_dict()
         return data
+
+
+class DamageClass(StrEnum):
+    """Which attack/defense stats a move uses; status moves deal no direct damage."""
+
+    PHYSICAL = "physical"
+    SPECIAL = "special"
+    STATUS = "status"
+
+
+@dataclass(frozen=True, slots=True)
+class Move:
+    """A validated, immutable move reference record (values as in PokéAPI).
+
+    ``power`` is ``None`` for status moves and for damaging moves whose damage is not
+    power-based (e.g. Seismic Toss). ``accuracy`` is ``None`` for moves that never miss.
+    """
+
+    move_id: int
+    name: str
+    type: PokemonType
+    damage_class: DamageClass
+    power: int | None
+    accuracy: int | None
+    priority: int
+    pp: int
+
+    def __post_init__(self) -> None:
+        if isinstance(self.move_id, bool) or not isinstance(self.move_id, int):
+            raise ValueError("move_id must be an integer")
+        if self.move_id <= 0:
+            raise ValueError("move_id must be positive")
+        if not isinstance(self.name, str) or not NAME_PATTERN.fullmatch(self.name):
+            raise ValueError("name must be a lowercase, hyphen-separated slug (e.g. 'u-turn')")
+        if not isinstance(self.type, PokemonType):
+            raise ValueError("type must be a PokemonType")
+        if not isinstance(self.damage_class, DamageClass):
+            raise ValueError("damage_class must be a DamageClass")
+        if self.power is not None:
+            if self.damage_class is DamageClass.STATUS:
+                raise ValueError("status moves must not have power")
+            _check_range("power", self.power, 1, MAX_MOVE_POWER)
+        if self.accuracy is not None:
+            _check_range("accuracy", self.accuracy, 1, 100)
+        _check_range("priority", self.priority, MIN_PRIORITY, MAX_PRIORITY)
+        _check_range("pp", self.pp, 1, MAX_PP)
+
+    @property
+    def display_name(self) -> str:
+        return self.name.replace("-", " ").title()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "move_id": self.move_id,
+            "name": self.name,
+            "type": self.type.value,
+            "damage_class": self.damage_class.value,
+            "power": self.power,
+            "accuracy": self.accuracy,
+            "priority": self.priority,
+            "pp": self.pp,
+        }
 
 
 def parse_identifier(name_or_id: str | int) -> str | int:

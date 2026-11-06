@@ -2,7 +2,7 @@ from typing import Any
 
 import pytest
 
-from pokeverse.catalog import BaseStats, Pokemon, PokemonType, parse_identifier
+from pokeverse.catalog import BaseStats, DamageClass, Move, Pokemon, PokemonType, parse_identifier
 
 PIKACHU_STATS = BaseStats(35, 55, 40, 50, 50, 90)
 CHARIZARD_STATS = BaseStats(78, 84, 78, 109, 85, 100)
@@ -180,3 +180,79 @@ def test_to_dict_can_omit_stats() -> None:
         "name": "pikachu",
         "types": ["electric"],
     }
+
+
+def make_move(**overrides: Any) -> Move:
+    fields: dict[str, Any] = {
+        "move_id": 85,
+        "name": "thunderbolt",
+        "type": PokemonType.ELECTRIC,
+        "damage_class": DamageClass.SPECIAL,
+        "power": 90,
+        "accuracy": 100,
+        "priority": 0,
+        "pp": 15,
+    }
+    return Move(**(fields | overrides))
+
+
+def test_move_can_be_created_and_serialized() -> None:
+    move = make_move()
+
+    assert move.display_name == "Thunderbolt"
+    assert move.to_dict() == {
+        "move_id": 85,
+        "name": "thunderbolt",
+        "type": "electric",
+        "damage_class": "special",
+        "power": 90,
+        "accuracy": 100,
+        "priority": 0,
+        "pp": 15,
+    }
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {
+            "name": "swords-dance",
+            "damage_class": DamageClass.STATUS,
+            "power": None,
+            "accuracy": None,
+        },
+        {"name": "seismic-toss", "damage_class": DamageClass.PHYSICAL, "power": None},
+        {"name": "swift", "accuracy": None},
+        {"name": "explosion", "power": 250},
+        {"name": "trick-room", "damage_class": DamageClass.STATUS, "power": None, "priority": -7},
+        {"name": "struggle", "pp": 1},
+    ],
+)
+def test_move_accepts_real_edge_cases(overrides: dict[str, Any]) -> None:
+    assert make_move(**overrides).name == overrides["name"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"move_id": 0}, "positive"),
+        ({"move_id": "85"}, "integer"),
+        ({"name": "Thunderbolt"}, "slug"),
+        ({"name": "breakneck-blitz--physical"}, "slug"),
+        ({"type": "electric"}, "PokemonType"),
+        ({"damage_class": "special"}, "DamageClass"),
+        ({"damage_class": DamageClass.STATUS}, "status moves must not have power"),
+        ({"power": 0}, "power must be between 1 and 250"),
+        ({"power": 251}, "power must be between 1 and 250"),
+        ({"accuracy": 0}, "accuracy must be between 1 and 100"),
+        ({"accuracy": 101}, "accuracy must be between 1 and 100"),
+        ({"priority": 6}, "priority must be between -7 and 5"),
+        ({"priority": None}, "priority must be an integer"),
+        ({"pp": 0}, "pp must be between 1 and 40"),
+        ({"pp": None}, "pp must be an integer"),
+        ({"power": True}, "power must be an integer"),
+    ],
+)
+def test_invalid_move_is_rejected(overrides: dict[str, Any], message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        make_move(**overrides)

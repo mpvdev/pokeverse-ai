@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 import pytest
 
-from pokeverse.catalog import BaseStats, Pokemon, PokemonType
+from pokeverse.catalog import BaseStats, DamageClass, Move, Pokemon, PokemonType
 from pokeverse.catalog.pokeapi import (
     DEFAULT_BASE_URL,
     PokeApiClient,
@@ -15,6 +15,7 @@ from pokeverse.catalog.pokeapi import (
     PokeApiResponseError,
     PokeApiUnavailableError,
     PokemonNotFoundError,
+    parse_move,
     parse_pokemon,
 )
 
@@ -24,6 +25,8 @@ PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), BaseStats(35, 55, 40, 
 CHARIZARD = Pokemon(
     6, "charizard", (PokemonType.FIRE, PokemonType.FLYING), BaseStats(78, 84, 78, 109, 85, 100)
 )
+THUNDERBOLT = Move(85, "thunderbolt", PokemonType.ELECTRIC, DamageClass.SPECIAL, 90, 100, 0, 15)
+SWORDS_DANCE = Move(14, "swords-dance", PokemonType.NORMAL, DamageClass.STATUS, None, None, 0, 20)
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -32,14 +35,19 @@ def load_fixture(name: str) -> dict[str, Any]:
     return json.loads((FIXTURES / f"{name}.json").read_text())
 
 
+def load_move_fixture(name: str) -> dict[str, Any]:
+    return load_fixture(f"move/{name}")
+
+
 def make_client(handler: Handler) -> PokeApiClient:
     return PokeApiClient(transport=httpx.MockTransport(handler))
 
 
 def fixture_handler(request: httpx.Request) -> httpx.Response:
-    name = request.url.path.rstrip("/").rsplit("/", 1)[-1]
-    aliases = {"25": "pikachu", "6": "charizard"}
-    fixture = FIXTURES / f"{aliases.get(name, name)}.json"
+    resource, name = request.url.path.rstrip("/").split("/")[-2:]
+    aliases = {"25": "pikachu", "6": "charizard", "85": "thunderbolt"}
+    folder = FIXTURES if resource == "pokemon" else FIXTURES / resource
+    fixture = folder / f"{aliases.get(name, name)}.json"
     if not fixture.exists():
         return httpx.Response(404, json={"status": 404, "message": "Not Found"})
     return httpx.Response(200, json=json.loads(fixture.read_text()))
@@ -105,6 +113,38 @@ def test_parse_rejects_malformed_payload(mutate: Callable[[dict[str, Any]], Any]
         parse_pokemon(payload)
 
 
+# --- parse_move ------------------------------------------------------------
+
+
+def test_parse_damaging_move() -> None:
+    assert parse_move(load_move_fixture("thunderbolt")) == THUNDERBOLT
+
+
+def test_parse_status_move_with_null_power_and_accuracy() -> None:
+    assert parse_move(load_move_fixture("swords-dance")) == SWORDS_DANCE
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("power"),
+        lambda p: p.pop("damage_class"),
+        lambda p: p.update(type={"name": "shadow"}),
+        lambda p: p.update(pp=None),
+        lambda p: p.update(name="breakneck-blitz--physical"),
+        lambda p: p.update(damage_class=None),
+    ],
+)
+def test_parse_move_rejects_unsupported_or_malformed(
+    mutate: Callable[[dict[str, Any]], Any],
+) -> None:
+    payload = load_move_fixture("thunderbolt")
+    mutate(payload)
+
+    with pytest.raises(PokeApiResponseError):
+        parse_move(payload)
+
+
 # --- PokeApiClient ---------------------------------------------------------
 
 
@@ -142,6 +182,24 @@ def test_fetch_pokemon_rejects_invalid_identifier(identifier: Any) -> None:
 def test_unknown_pokemon_raises_not_found() -> None:
     with make_client(fixture_handler) as client, pytest.raises(PokemonNotFoundError):
         client.fetch_pokemon("missingno")
+
+
+@pytest.mark.parametrize("identifier", ["thunderbolt", " Thunderbolt ", 85])
+def test_fetch_move_by_name_or_id(identifier: str | int) -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return fixture_handler(request)
+
+    with make_client(handler) as client:
+        assert client.fetch_move(identifier) == THUNDERBOLT
+    assert seen[0].startswith("/api/v2/move/")
+
+
+def test_unknown_move_raises_not_found() -> None:
+    with make_client(fixture_handler) as client, pytest.raises(PokemonNotFoundError):
+        client.fetch_move("splashier")
 
 
 @pytest.mark.parametrize(
@@ -196,3 +254,10 @@ def test_all_client_errors_share_a_base_class() -> None:
 def test_live_fetch_matches_fixture() -> None:
     with PokeApiClient() as client:
         assert client.fetch_pokemon("charizard") == parse_pokemon(load_fixture("charizard"))
+
+
+@pytest.mark.network
+def test_live_fetch_move_matches_fixture() -> None:
+    with PokeApiClient() as client:
+        assert client.fetch_move("thunderbolt") == THUNDERBOLT
+        assert client.fetch_move("swords-dance") == SWORDS_DANCE

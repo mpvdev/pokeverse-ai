@@ -5,11 +5,13 @@ from datetime import UTC, datetime
 from os import PathLike
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Any, Self
 
-from pokeverse.catalog.models import BaseStats, Pokemon, PokemonType
+from pokeverse.catalog.models import BaseStats, DamageClass, Move, Pokemon, PokemonType
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+# Every schema statement is CREATE ... IF NOT EXISTS, so older versions upgrade by rerunning it.
+UPGRADABLE_VERSIONS = (0, 1, 2)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS pokemon (
@@ -37,6 +39,18 @@ CREATE TABLE IF NOT EXISTS pokemon_stats (
     special_defense  INTEGER NOT NULL CHECK (special_defense BETWEEN 1 AND 255),
     speed            INTEGER NOT NULL CHECK (speed BETWEEN 1 AND 255)
 );
+
+CREATE TABLE IF NOT EXISTS move (
+    move_id       INTEGER PRIMARY KEY CHECK (move_id > 0),
+    name          TEXT    NOT NULL UNIQUE,
+    type          TEXT    NOT NULL,
+    damage_class  TEXT    NOT NULL CHECK (damage_class IN ('physical', 'special', 'status')),
+    power         INTEGER CHECK (power BETWEEN 1 AND 250),
+    accuracy      INTEGER CHECK (accuracy BETWEEN 1 AND 100),
+    priority      INTEGER NOT NULL CHECK (priority BETWEEN -7 AND 5),
+    pp            INTEGER NOT NULL CHECK (pp BETWEEN 1 AND 40),
+    updated_at    TEXT    NOT NULL
+);
 """
 
 # Pokémon imported under schema v1 have no stats row; the inner join hides them, so the
@@ -45,6 +59,10 @@ _SELECT = """
 SELECT p.pokedex_id, p.name, s.hp, s.attack, s.defense,
        s.special_attack, s.special_defense, s.speed
 FROM pokemon p JOIN pokemon_stats s USING (pokedex_id)
+"""
+
+_SELECT_MOVE = """
+SELECT move_id, name, type, damage_class, power, accuracy, priority, pp FROM move
 """
 
 
@@ -70,11 +88,10 @@ class SqlitePokemonRepository:
         (current,) = self._connection.execute("PRAGMA user_version").fetchone()
         if current == SCHEMA_VERSION:
             return
-        if current not in (0, 1):
+        if current not in UPGRADABLE_VERSIONS:
             raise CatalogSchemaError(
                 f"Unsupported catalog schema version {current} (expected {SCHEMA_VERSION})"
             )
-        # Every statement is CREATE ... IF NOT EXISTS, so this both creates v2 and upgrades v1.
         with self._connection:
             self._connection.executescript(_SCHEMA)
             self._connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -146,6 +163,49 @@ class SqlitePokemonRepository:
             name=name,
             types=tuple(PokemonType(type_name) for (type_name,) in type_rows),
             stats=BaseStats(*stats),
+        )
+
+    def save_move(self, move: Move) -> None:
+        """Insert or replace a move."""
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT OR REPLACE INTO move (move_id, name, type, damage_class, power,
+                    accuracy, priority, pp, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    move.move_id,
+                    move.name,
+                    move.type.value,
+                    move.damage_class.value,
+                    move.power,
+                    move.accuracy,
+                    move.priority,
+                    move.pp,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+
+    def get_move_by_id(self, move_id: int) -> Move | None:
+        row = self._connection.execute(f"{_SELECT_MOVE} WHERE move_id = ?", (move_id,)).fetchone()
+        return self._to_move(row) if row else None
+
+    def get_move_by_name(self, name: str) -> Move | None:
+        row = self._connection.execute(f"{_SELECT_MOVE} WHERE name = ?", (name,)).fetchone()
+        return self._to_move(row) if row else None
+
+    @staticmethod
+    def _to_move(row: tuple[Any, ...]) -> Move:
+        move_id, name, move_type, damage_class, power, accuracy, priority, pp = row
+        return Move(
+            move_id=move_id,
+            name=name,
+            type=PokemonType(move_type),
+            damage_class=DamageClass(damage_class),
+            power=power,
+            accuracy=accuracy,
+            priority=priority,
+            pp=pp,
         )
 
     def close(self) -> None:

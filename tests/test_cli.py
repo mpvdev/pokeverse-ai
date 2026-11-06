@@ -36,9 +36,10 @@ class Upstream:
         self.requests.append(request.url.path)
         if self.down:
             raise httpx.ConnectError("connection refused")
-        name = request.url.path.rstrip("/").rsplit("/", 1)[-1]
+        resource, name = request.url.path.rstrip("/").split("/")[-2:]
         name = {"25": "pikachu", "6": "charizard"}.get(name, name)
-        fixture = FIXTURES / f"{name}.json"
+        folder = FIXTURES if resource == "pokemon" else FIXTURES / resource
+        fixture = folder / f"{name}.json"
         if not fixture.exists():
             return httpx.Response(404, json={"status": 404, "message": "Not Found"})
         return httpx.Response(200, json=json.loads(fixture.read_text()))
@@ -156,6 +157,51 @@ def test_list_empty_catalog(db: str) -> None:
 
     assert result.exit_code == 0
     assert "empty" in result.stdout
+
+
+def test_pokemon_lookup_accepts_pokedex_style_numbers(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "pokemon", "#006")
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith("#0006 Charizard")
+
+
+def test_move_lookup_prints_summary(db: str, upstream: Upstream) -> None:
+    damaging = invoke(db, "move", "Thunderbolt")
+    status = invoke(db, "move", "Swords Dance")
+
+    assert damaging.stdout == (
+        "#0085 Thunderbolt — Electric, special, power 90, accuracy 100%, priority 0, PP 15\n"
+    )
+    assert status.stdout == (
+        "#0014 Swords Dance — Normal, status, power —, accuracy never misses, priority 0, PP 20\n"
+    )
+    assert upstream.requests == ["/api/v2/move/thunderbolt", "/api/v2/move/swords-dance"]
+
+
+def test_move_json_is_served_locally_after_import(db: str, upstream: Upstream) -> None:
+    invoke(db, "move", "thunderbolt")
+    upstream.down = True
+
+    result = invoke(db, "move", "thunderbolt", "--offline", "--json")
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["power"] == 90
+
+
+def test_unknown_move_exits_not_found(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "move", "splashier")
+
+    assert result.exit_code == EXIT_NOT_FOUND
+    assert "does not exist" in result.stderr
+
+
+def test_move_outage_exits_unavailable(db: str, upstream: Upstream) -> None:
+    upstream.down = True
+
+    result = invoke(db, "move", "thunderbolt")
+
+    assert result.exit_code == EXIT_UPSTREAM_UNAVAILABLE
 
 
 def test_team_prints_analysis(db: str, upstream: Upstream) -> None:

@@ -11,7 +11,14 @@ from typing import Any, Self
 
 import httpx
 
-from pokeverse.catalog.models import BaseStats, Pokemon, PokemonType, parse_identifier
+from pokeverse.catalog.models import (
+    BaseStats,
+    DamageClass,
+    Move,
+    Pokemon,
+    PokemonType,
+    parse_identifier,
+)
 
 DEFAULT_BASE_URL = "https://pokeapi.co/api/v2"
 DEFAULT_TIMEOUT_SECONDS = 10.0
@@ -64,6 +71,26 @@ def parse_pokemon(payload: Mapping[str, Any]) -> Pokemon:
         raise PokeApiResponseError(f"Malformed Pokémon payload: {error}") from error
 
 
+def parse_move(payload: Mapping[str, Any]) -> Move:
+    """Map a PokéAPI ``/move/{id}`` payload to a validated ``Move``.
+
+    Moves outside our model (e.g. Shadow-type moves, Z-moves) are rejected as unsupported.
+    """
+    try:
+        return Move(
+            move_id=payload["id"],
+            name=payload["name"],
+            type=PokemonType(payload["type"]["name"]),
+            damage_class=DamageClass(payload["damage_class"]["name"]),
+            power=payload["power"],
+            accuracy=payload["accuracy"],
+            priority=payload["priority"],
+            pp=payload["pp"],
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise PokeApiResponseError(f"Unsupported or malformed move payload: {error}") from error
+
+
 class PokeApiClient:
     """Synchronous PokéAPI client.
 
@@ -94,6 +121,11 @@ class PokeApiClient:
         """Fetch a single Pokémon by name (e.g. ``"Pikachu"``) or Pokédex id."""
         identifier = parse_identifier(name_or_id)
         return parse_pokemon(self._get_json(f"/pokemon/{identifier}"))
+
+    def fetch_move(self, name_or_id: str | int) -> Move:
+        """Fetch a single move by slug (e.g. ``"thunderbolt"``) or move id."""
+        identifier = parse_identifier(name_or_id)
+        return parse_move(self._get_json(f"/move/{identifier}"))
 
     def _get_json(self, path: str) -> Mapping[str, Any]:
         try:

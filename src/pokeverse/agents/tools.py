@@ -30,8 +30,8 @@ GET_POKEMON_PARAMETERS: dict[str, Any] = {
 }
 
 
-def normalize_pokemon_identifier(raw: str) -> str | int:
-    """Turn free-form model input into a catalog identifier.
+def normalize_identifier(raw: str) -> str | int:
+    """Turn free-form input (a Pokémon or move name, or an id) into a catalog identifier.
 
     ``"Mr. Mime"`` -> ``"mr-mime"``, ``"Farfetch'd"`` -> ``"farfetchd"``, ``"#025"`` -> ``25``.
     """
@@ -44,7 +44,7 @@ def normalize_pokemon_identifier(raw: str) -> str | int:
 def lookup(catalog: PokemonCatalog, name_or_id: str) -> Pokemon | dict[str, Any]:
     """The Pokémon, or an error object the model can explain."""
     try:
-        return catalog.get(normalize_pokemon_identifier(name_or_id))
+        return catalog.get(normalize_identifier(name_or_id))
     except ValueError as error:
         return {"error": "invalid_identifier", "message": str(error)}
     except PokemonNotInCatalogError as error:
@@ -69,9 +69,9 @@ def make_catalog_tools(catalog: PokemonCatalog) -> tuple[Tool, ...]:
             name="get_pokemon",
             description=(
                 "Look up a Pokémon in the PokéVerse catalog. Returns its National Pokédex "
-                "number, canonical name and elemental types, or an error object. Use it for "
-                "any question about a specific Pokémon's types or Pokédex number instead of "
-                "answering from memory."
+                "number, canonical name, elemental types and base stats, or an error object. "
+                "Use it for any question about a specific Pokémon's types, stats or Pokédex "
+                "number instead of answering from memory."
             ),
             parameters=GET_POKEMON_PARAMETERS,
             handler=get_pokemon,

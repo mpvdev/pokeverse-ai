@@ -4,13 +4,22 @@ from pathlib import Path
 
 import pytest
 
-from pokeverse.catalog import BaseStats, Pokemon, PokemonType, SqlitePokemonRepository
+from pokeverse.catalog import (
+    BaseStats,
+    DamageClass,
+    Move,
+    Pokemon,
+    PokemonType,
+    SqlitePokemonRepository,
+)
 from pokeverse.catalog.repository import SCHEMA_VERSION, CatalogSchemaError
 
 PIKACHU_STATS = BaseStats(35, 55, 40, 50, 50, 90)
 CHARIZARD_STATS = BaseStats(78, 84, 78, 109, 85, 100)
 PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), PIKACHU_STATS)
 CHARIZARD = Pokemon(6, "charizard", (PokemonType.FIRE, PokemonType.FLYING), CHARIZARD_STATS)
+THUNDERBOLT = Move(85, "thunderbolt", PokemonType.ELECTRIC, DamageClass.SPECIAL, 90, 100, 0, 15)
+SWORDS_DANCE = Move(14, "swords-dance", PokemonType.NORMAL, DamageClass.STATUS, None, None, 0, 20)
 
 V1_SCHEMA = """
 CREATE TABLE pokemon (
@@ -28,6 +37,16 @@ CREATE TABLE pokemon_type (
 INSERT INTO pokemon VALUES (25, 'pikachu', '2026-01-01T00:00:00+00:00');
 INSERT INTO pokemon_type VALUES (25, 1, 'electric');
 PRAGMA user_version = 1;
+"""
+
+V2_ADDITIONS = """
+CREATE TABLE pokemon_stats (
+    pokedex_id       INTEGER PRIMARY KEY REFERENCES pokemon (pokedex_id) ON DELETE CASCADE,
+    hp INTEGER NOT NULL, attack INTEGER NOT NULL, defense INTEGER NOT NULL,
+    special_attack INTEGER NOT NULL, special_defense INTEGER NOT NULL, speed INTEGER NOT NULL
+);
+INSERT INTO pokemon_stats VALUES (25, 35, 55, 40, 50, 50, 90);
+PRAGMA user_version = 2;
 """
 
 
@@ -144,3 +163,36 @@ def test_v1_rows_without_stats_are_misses_until_re_saved(tmp_path: Path) -> None
 
         assert repo.get_by_name("pikachu") == PIKACHU
         assert repo.count() == 1
+
+
+def test_v2_database_is_upgraded_and_keeps_its_data(tmp_path: Path) -> None:
+    db_path = tmp_path / "catalog.db"
+    connection = sqlite3.connect(db_path)
+    connection.executescript(V1_SCHEMA + V2_ADDITIONS)
+    connection.close()
+
+    with SqlitePokemonRepository(db_path) as repo:
+        assert repo.get_by_name("pikachu") == PIKACHU
+        repo.save_move(THUNDERBOLT)
+        assert repo.get_move_by_name("thunderbolt") == THUNDERBOLT
+
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
+
+
+def test_move_round_trip(repository: SqlitePokemonRepository) -> None:
+    repository.save_move(THUNDERBOLT)
+    repository.save_move(SWORDS_DANCE)
+
+    assert repository.get_move_by_id(85) == THUNDERBOLT
+    assert repository.get_move_by_name("swords-dance") == SWORDS_DANCE
+    assert repository.get_move_by_name("surf") is None
+    assert repository.get_move_by_id(57) is None
+
+
+def test_save_move_updates(repository: SqlitePokemonRepository) -> None:
+    repository.save_move(THUNDERBOLT)
+    changed = Move(85, "thunderbolt", PokemonType.ELECTRIC, DamageClass.SPECIAL, 95, 100, 0, 15)
+    repository.save_move(changed)
+
+    assert repository.get_move_by_id(85) == changed

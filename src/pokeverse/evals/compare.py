@@ -9,7 +9,7 @@ from typing import Any
 from pokeverse.agents.generalist import GeneralistAgent
 from pokeverse.agents.research import ChatModel
 from pokeverse.agents.supervisor import OptimizeMode, Supervisor, SupervisorResult
-from pokeverse.agents.tools import normalize_pokemon_identifier
+from pokeverse.agents.tools import normalize_identifier
 from pokeverse.catalog import PokemonCatalog, PokemonNotInCatalogError, PokemonType
 from pokeverse.catalog.type_chart import effectiveness
 from pokeverse.llm import LlmRequestError
@@ -158,7 +158,7 @@ def _resolve(catalog: PokemonCatalog, names: list[str]) -> Team | str:
     if not names:
         return "no team produced"
     try:
-        return Team(tuple(catalog.get(normalize_pokemon_identifier(n)) for n in names))
+        return Team(tuple(catalog.get(normalize_identifier(n)) for n in names))
     except (PokemonNotInCatalogError, ValueError) as error:
         return f"invalid team {names}: {error}"
 

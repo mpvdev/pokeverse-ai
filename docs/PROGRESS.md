@@ -91,21 +91,24 @@ Deliverable: a multi-agent Pokémon team advisor.
 Deliverable: an AI-assisted battle strategy system. Battle mechanics are deterministic code; agents only choose actions and explain them. Mechanics are deliberately simplified singles: no abilities, items, status conditions or weather; every Pokémon at level 50 with fixed IVs/EVs and a neutral nature.
 
 1. **Base stats in the catalog** — the numbers battles need (HP, attack, defense, special attack, special defense, speed).
-2. **Moves as reference data** — `Move` (type, physical/special/status, power, accuracy, priority, PP) imported from PokéAPI into the catalog, plus a small battle moveset per Pokémon.
-3. **Battle stats and damage** — level-50 stat formula and the damage formula (STAB, type effectiveness, critical hits, random roll) as pure functions with an injectable RNG.
-4. **Battle engine** — immutable battle state, legal actions (move or switch), turn order (priority, then speed), fainting and forced switches; seeded, reproducible battle logs.
-5. **Baseline players and `pokeverse battle`** — random and greedy (highest expected damage) players; simulate team vs team from the CLI.
-6. **Battle Strategy Agent** — an LLM picks actions with tools (legal actions, damage estimates); code validates every choice.
-7. **Opponent Analysis Agent** — threat assessment of an opposing team from deterministic matchups and damage ranges, handed to the strategy agent as verified facts.
-8. **Battle evaluation and feedback** — many seeded battles: agent vs greedy win rate and cost; a Battle Evaluation Agent reviews logs for mistakes, and its feedback is fed into the next run and measured.
+2. **Moves as reference data** — `Move` (type, physical/special/status, power, accuracy, priority, PP) imported from PokéAPI into the catalog.
+3. **Learnsets and battle movesets** — the moves each Pokémon can learn, stored with the catalog, and a moveset of up to 4 moves per battler validated against it (a deterministic default: damaging moves favouring STAB and type coverage).
+4. **Battle stats and damage** — level-50 stat formula and the damage formula (STAB, type effectiveness, critical hits, random roll) as pure functions with an injectable RNG.
+5. **Battle engine** — immutable battle state, legal actions (move or switch), turn order (priority, then speed), fainting and forced switches; seeded, reproducible battle logs.
+6. **Baseline players and `pokeverse battle`** — random and greedy (highest expected damage) players; simulate team vs team from the CLI.
+7. **Battle Strategy Agent** — an LLM picks actions with tools (legal actions, damage estimates); code validates every choice.
+8. **Opponent Analysis Agent** — threat assessment of an opposing team from deterministic matchups and damage ranges, handed to the strategy agent as verified facts.
+9. **Battle evaluation and feedback** — many seeded battles: agent vs greedy win rate and cost; a Battle Evaluation Agent reviews logs for mistakes, and its feedback is fed into the next run and measured.
 
 ### Phase 3 progress
 
 - [x] Step 1: base stats — immutable `BaseStats` (six stats, each 1–255, `total`) is a required part of `Pokemon`; parsed from PokéAPI's `stats` (fixtures now carry real values); `Pokemon.to_dict()` adds `base_stats` (team members omit them via `to_dict(stats=False)`, since team analysis is type-based and stats would only cost tokens). Catalog schema v2 adds a `pokemon_stats` table; v1 databases are upgraded in place, and v1 rows (no stats) count as misses, so they are re-imported on the next online lookup. `pokeverse pokemon` prints a stats line. Trade-off: until re-imported, v1 rows are invisible offline and to `list`.
 
+- [x] Step 2: moves — immutable `Move` (`move_id`, slug `name`, `type`, `DamageClass` physical/special/status, `power` or `None` for status and fixed-damage moves, `accuracy` or `None` for never-miss moves, `priority` −7…+5, `pp` 1–40; status moves must not have power), parsed from PokéAPI `/move/{name}` (real fixtures for Thunderbolt and Swords Dance); Shadow-type moves and Z-moves fall outside the model and are rejected. Catalog schema v3 adds a `move` table (v1/v2 upgrade in place, data kept); `PokemonCatalog.get_move` is local-first like `get`, with `MoveNotInCatalogError`. `pokeverse move <name|id> [--json] [--offline]`. CLI `pokemon` and `move` now normalize names like agent tools do (`"Mr. Mime"`, `"Swords Dance"`, `#006`); the normalizer is renamed `normalize_identifier`. The `get_pokemon` tool description now mentions base stats. Known limit: unsupported moves (e.g. `shadow-rush`) report exit 3 "upstream failed" rather than "unsupported".
+
 ## Next Up
 
-- Phase 3 Step 2: moves as reference data.
+- Phase 3 Step 3: learnsets and battle movesets.
 - Carried over from Phase 2: repeated runs per cell in `compare` before ranking systems; `goal` constraints such as "Fire-only" are enforced only by the model; in `auto` mode, wrong type claims on teams without vulnerabilities are not fact-checked; the Strands spike (re-implement the Supervisor and compare with `pokeverse compare`).
 
 ## Running Locally
@@ -119,6 +122,7 @@ uv run ruff check . && uv run ruff format --check .
 uv run pokeverse --version
 uv run pokeverse pokemon pikachu    # uses ~/.local/share/pokeverse/catalog.db
 uv run pokeverse list
+uv run pokeverse move "Swords Dance"
 uv run pokeverse ask "What type is Pikachu?" --usage   # needs OPENAI_API_KEY in .env or the environment
 uv run pokeverse ask "What type is Pikachu?" --no-tools --usage   # model answers from memory only
 uv run pokeverse ask "What type is Pikachu?" --json              # validated structured answer
