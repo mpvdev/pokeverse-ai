@@ -7,7 +7,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 from dotenv import find_dotenv, load_dotenv
@@ -16,8 +16,13 @@ from pokeverse.agents import (
     POKEDEX_ANSWER_SCHEMA,
     PokedexAnswer,
     ResearchAgent,
+    Supervisor,
+    TeamCompositionAgent,
+    TeamOptimizationAgent,
     make_catalog_tools,
+    normalize_pokemon_identifier,
 )
+from pokeverse.agents.supervisor import OptimizeMode
 from pokeverse.catalog import (
     Pokemon,
     PokemonCatalog,
@@ -27,6 +32,8 @@ from pokeverse.catalog import (
 )
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.evals import RESEARCH_CASES, EvalResult, run_case
+from pokeverse.evals.compare import COMPARE_CASES, SYSTEMS
+from pokeverse.evals.compare import run_case as compare_case
 from pokeverse.llm import (
     Completion,
     LlmAuthError,
@@ -35,6 +42,7 @@ from pokeverse.llm import (
     LlmUnavailableError,
     OpenAIChat,
 )
+from pokeverse.teams import MAX_TEAM_SIZE, Team, TeamAnalysis, analyze_team
 
 EXIT_NOT_FOUND = 1
 EXIT_INVALID_INPUT = 2
@@ -156,6 +164,181 @@ def list_command(
             typer.echo(format_pokemon(pokemon))
 
 
+@app.command("team")
+def team_command(
+    ctx: typer.Context,
+    names: Annotated[
+        list[str], typer.Argument(help="1-6 Pokémon names or Pokédex ids (repeats allowed).")
+    ],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Analyze a team's type weaknesses and coverage (deterministic, no LLM)."""
+    settings: Settings = ctx.obj
+    if len(names) > MAX_TEAM_SIZE:
+        raise fail(f"a team can have at most {MAX_TEAM_SIZE} Pokémon", EXIT_INVALID_INPUT)
+    try:
+        with open_catalog(settings, offline=offline) as catalog:
+            members = tuple(catalog.get(normalize_pokemon_identifier(name)) for name in names)
+        analysis = analyze_team(Team(members))
+    except ValueError as error:
+        raise fail(str(error), EXIT_INVALID_INPUT) from error
+    except PokemonNotInCatalogError as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+    except UpstreamUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+
+    if as_json:
+        typer.echo(json.dumps(analysis.to_dict()))
+        return
+    typer.echo("Team: " + ", ".join(member.display_name for member in analysis.team.members))
+    print_analysis(analysis)
+
+
+def print_analysis(analysis: TeamAnalysis) -> None:
+    typer.echo("Vulnerable to:" + ("" if analysis.vulnerabilities else " none"))
+    for exposure in analysis.vulnerabilities:
+        cover = ", ".join(exposure.resists + exposure.immune) or "nobody"
+        weak = ", ".join(exposure.weak)
+        typer.echo(f"  {exposure.attacking_type:<9} weak: {weak} | resisted by: {cover}")
+    typer.echo("Unresisted attack types: " + (", ".join(analysis.unresisted) or "none"))
+    typer.echo("Offensive gaps (STAB): " + (", ".join(analysis.offensive_gaps) or "none"))
+
+
+@app.command("build")
+def build_command(
+    ctx: typer.Context,
+    request: Annotated[str, typer.Argument(help="What the team should be, in plain words.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    show_usage: Annotated[
+        bool, typer.Option("--usage", help="Print tool calls and token usage to stderr.")
+    ] = False,
+) -> None:
+    """Ask the Team Composition Agent to build a team; our code re-checks the result."""
+    settings: Settings = ctx.obj
+    with llm_errors():
+        chat = OpenAIChat(LlmSettings.from_env())
+        with open_catalog(settings, offline=False) as catalog:
+            result = TeamCompositionAgent(chat, catalog).build(request)
+
+    if as_json:
+        typer.echo(json.dumps(result.to_dict()))
+    else:
+        members = zip(result.analysis.team.members, result.proposal.members, strict=True)
+        for pokemon, choice in members:
+            types = "/".join(t.value for t in pokemon.types)
+            typer.echo(f"  {pokemon.display_name:<14} {types:<16} {choice.role}")
+        typer.echo(f"\n{result.proposal.summary}\n")
+        print_analysis(result.analysis)
+    if not result.self_checked:
+        typer.echo("Warning: the agent did not analyze this exact team before answering", err=True)
+    if show_usage:
+        print_usage(result.completion)
+
+
+@app.command("optimize")
+def optimize_command(
+    ctx: typer.Context,
+    names: Annotated[list[str], typer.Argument(help="The team: 1-6 Pokémon names or ids.")],
+    goal: Annotated[str, typer.Option("--goal", help="What the team should achieve.")] = "",
+    keep: Annotated[
+        list[str] | None, typer.Option("--keep", help="Never swap out this member (repeatable).")
+    ] = None,
+    notes: Annotated[
+        str, typer.Option("--notes", help="Claims about the team to fact-check.")
+    ] = "",
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    show_usage: Annotated[
+        bool, typer.Option("--usage", help="Print tool calls and token usage to stderr.")
+    ] = False,
+) -> None:
+    """Ask the Team Optimization Agent to fact-check and improve a team."""
+    settings: Settings = ctx.obj
+    if len(names) > MAX_TEAM_SIZE:
+        raise fail(f"a team can have at most {MAX_TEAM_SIZE} Pokémon", EXIT_INVALID_INPUT)
+    try:
+        with llm_errors():
+            chat = OpenAIChat(LlmSettings.from_env())
+            with open_catalog(settings, offline=False) as catalog:
+                team = Team(tuple(catalog.get(normalize_pokemon_identifier(n)) for n in names))
+                result = TeamOptimizationAgent(chat, catalog).optimize(
+                    team, goal=goal, keep=keep or (), notes=notes
+                )
+    except PokemonNotInCatalogError as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+
+    if as_json:
+        typer.echo(json.dumps(result.to_dict()))
+    else:
+        typer.echo(
+            f"Before: {', '.join(result.original.team.names)}  score {result.original.score}"
+        )
+        for swap in result.swaps:
+            status = "ACCEPTED" if swap.accepted else "REJECTED"
+            typer.echo(f"  {status} {swap.out} -> {swap.into}: {swap.reason} [{swap.verdict}]")
+        typer.echo(f"After:  {', '.join(result.final.team.names)}  score {result.final.score}")
+        print_analysis(result.final)
+        if result.claims:
+            typer.echo("Claims:")
+        for claim in result.claims:
+            status = "ok   " if claim.correct else "WRONG"
+            actual = (
+                f"{claim.actual} ({claim.multiplier:g}x)" if claim.actual else "unknown Pokémon"
+            )
+            typer.echo(
+                f"  {status} {claim.member} vs {claim.attacking_type}: "
+                f"claimed {claim.claimed}, actually {actual}"
+            )
+        typer.echo(f"\n{result.critique}")
+    if show_usage:
+        print_usage(result.completion)
+
+
+@app.command("advise")
+def advise_command(
+    ctx: typer.Context,
+    request: Annotated[str, typer.Argument(help="Any Pokémon question or team request.")],
+    optimize: Annotated[
+        str,
+        typer.Option(
+            "--optimize",
+            help="When to run the Team Optimization Agent after building: "
+            "auto (only if the team has vulnerabilities), always, or never.",
+        ),
+    ] = "auto",
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    show_usage: Annotated[
+        bool, typer.Option("--usage", help="Print delegations and token usage to stderr.")
+    ] = False,
+) -> None:
+    """Ask the Supervisor, which delegates to the research and team-building agents."""
+    settings: Settings = ctx.obj
+    with llm_errors():
+        supervisor_mode = cast("OptimizeMode", optimize)
+        chat = OpenAIChat(LlmSettings.from_env())
+        with open_catalog(settings, offline=False) as catalog:
+            result = Supervisor(chat, catalog, optimize=supervisor_mode).run(request)
+
+    typer.echo(json.dumps(result.to_dict()) if as_json else result.answer)
+    if show_usage:
+        for delegation in result.delegations:
+            outcome = f"error: {delegation.error}" if delegation.error else "ok"
+            handoff = f" (handoff: {', '.join(delegation.handoff)})" if delegation.handoff else ""
+            typer.echo(
+                f"[delegate] {delegation.agent}: {delegation.task!r}{handoff} -> {outcome} "
+                f"({delegation.tokens} tokens)",
+                err=True,
+            )
+        typer.echo(
+            f"[{result.completion.model_id}] tokens supervisor={result.completion.total_tokens} "
+            f"specialists={result.specialist_tokens} total={result.total_tokens} "
+            f"latency={result.completion.latency_ms}ms",
+            err=True,
+        )
+
+
 @app.command("ask")
 def ask_command(
     ctx: typer.Context,
@@ -219,6 +402,8 @@ def llm_errors() -> Iterator[None]:
     except LlmAuthError as error:
         raise fail(str(error), EXIT_AUTH) from error
     except LlmUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+    except UpstreamUnavailableError as error:
         raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
     except LlmRequestError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
@@ -310,6 +495,89 @@ def eval_command(
     )
     if passed != len(results):
         raise typer.Exit(EXIT_EVAL_FAILED)
+
+
+@app.command("compare")
+def compare_command(
+    ctx: typer.Context,
+    case_ids: Annotated[
+        list[str] | None, typer.Option("--case", help="Run only this case id (repeatable).")
+    ] = None,
+    systems: Annotated[
+        list[str] | None,
+        typer.Option("--system", help=f"Run only this system (repeatable): {', '.join(SYSTEMS)}."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+) -> None:
+    """Compare single- and multi-agent systems on fixed tasks (live; costs many tokens)."""
+    settings: Settings = ctx.obj
+    known = {case.id: case for case in COMPARE_CASES}
+    unknown = [c for c in case_ids or () if c not in known] + [
+        s for s in systems or () if s not in SYSTEMS
+    ]
+    if unknown:
+        raise fail(
+            f"unknown case/system {unknown}; cases: {sorted(known)}; systems: {list(SYSTEMS)}",
+            EXIT_INVALID_INPUT,
+        )
+    cases = [known[c] for c in case_ids] if case_ids else list(COMPARE_CASES)
+    chosen = [s for s in SYSTEMS if s in systems] if systems else list(SYSTEMS)
+
+    outcomes = []
+    aborted: Exception | None = None
+    with llm_errors():
+        chat = OpenAIChat(LlmSettings.from_env())
+        with open_catalog(settings, offline=False) as catalog:
+            for case in cases:
+                for system in chosen:
+                    try:
+                        outcome = compare_case(system, case, chat, catalog)
+                    except (LlmAuthError, LlmUnavailableError, UpstreamUnavailableError) as error:
+                        aborted = error
+                        break
+                    outcomes.append(outcome)
+                    status = "PASS" if outcome.passed else "FAIL"
+                    score = outcome.analysis.score if outcome.analysis else "-"
+                    # With --json, progress goes to stderr so stdout stays valid JSON.
+                    typer.echo(
+                        f"{status} {case.id:<14} {system:<10} {outcome.tokens:>6} tok "
+                        f"{outcome.latency_ms / 1000:>5.1f}s  score {score}",
+                        err=as_json,
+                    )
+                    for failure in outcome.failures:
+                        typer.echo(f"     - {failure}", err=as_json)
+                if aborted:
+                    break
+
+    summary = []
+    for system in chosen:
+        runs = [o for o in outcomes if o.system == system]
+        if not runs:
+            continue
+        summary.append(
+            {
+                "system": system,
+                "passed": sum(o.passed for o in runs),
+                "runs": len(runs),
+                "tokens": sum(o.tokens for o in runs),
+                "avg_latency_ms": sum(o.latency_ms for o in runs) // len(runs),
+            }
+        )
+    if as_json:
+        report = {"runs": [o.to_dict() for o in outcomes], "summary": summary}
+        typer.echo(json.dumps({**report, "aborted": str(aborted) if aborted else None}))
+    else:
+        typer.echo("")
+        for row in summary:
+            typer.echo(
+                f"{row['system']:<10} passed {row['passed']}/{row['runs']} | "
+                f"tokens {row['tokens']} (avg {row['tokens'] // row['runs']}) | "
+                f"avg latency {row['avg_latency_ms'] / 1000:.1f}s"
+            )
+    if aborted:
+        # Re-raise through the usual mapping so the exit code reflects the cause.
+        with llm_errors():
+            raise aborted
 
 
 def run() -> None:

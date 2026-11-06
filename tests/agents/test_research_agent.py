@@ -49,7 +49,7 @@ def test_agent_sends_prompt_tools_and_schema(catalog: PokemonCatalog) -> None:
     (request,) = chat.requests
     assert request["prompt"] == "What type is Pikachu?"
     assert request["system"] == RESEARCH_SYSTEM_PROMPT
-    assert [tool.name for tool in request["tools"]] == ["get_pokemon"]
+    assert [tool.name for tool in request["tools"]] == ["get_pokemon", "get_type_matchups"]
     assert request["output_schema"] is POKEDEX_ANSWER_SCHEMA
 
 
@@ -72,6 +72,19 @@ def test_claims_without_successful_lookup_are_ungrounded(catalog: PokemonCatalog
 
     assert result.ungrounded == ("raichu",)
     assert result.to_dict()["ungrounded"] == ["raichu"]
+
+
+def test_matchup_lookup_grounds_the_pokemon(catalog: PokemonCatalog) -> None:
+    matchup = ToolCall(
+        "get_type_matchups",
+        {"name_or_id": "Pikachu"},
+        {"pokemon": PIKACHU.to_dict(), "weak_to": {"ground": 2.0}, "resists": {}, "immune_to": {}},
+    )
+
+    result = ResearchAgent(ScriptedChat(answer(["pikachu"]), (matchup,)), catalog).ask("q")
+
+    assert result.looked_up == {"pikachu"}
+    assert result.ungrounded == ()
 
 
 def test_invalid_model_reply_raises_request_error(catalog: PokemonCatalog) -> None:

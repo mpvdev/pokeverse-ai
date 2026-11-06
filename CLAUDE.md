@@ -5,7 +5,7 @@
 **Project Name:** PokéVerse AI  
 **GitHub Repository:** `mpvdev/pokeverse-ai`  
 **Project Type:** Multi-Agent AI + AWS Portfolio Project  
-**Current Phase:** Phase 2 — Multi-Agent Trainer System (not started; Phase 1 complete)  
+**Current Phase:** Phase 3 — Battle Intelligence (not started; Phase 2 complete)  
 **Development Approach:** Backend-first, CLI-first, learning-oriented
 
 ### Vision
@@ -628,7 +628,14 @@ The following decisions have already been made:
 - Assistant writes the implementation code; developer reviews it.
 - GitHub Copilot (Claude) in VS Code provides mentorship, architecture guidance, reviews, debugging, and explicitly requested changes.
 
-**Current development phase: Phase 2 — Multi-Agent Trainer System** (not started).
+**Current development phase: Phase 3 — Battle Intelligence** (not started).
+
+Phase 2 (Multi-Agent Trainer System) is complete on branch `phase-2`:
+
+- Deterministic type chart (`get_type_matchups`) and team analysis (`pokeverse team`).
+- Four agents: Research, Team Composition, Team Optimization (model proposes, code decides) and a Supervisor that delegates to them as tools (`pokeverse advise`).
+- Shared context: verified facts from tool outputs are handed between agents; failures carry partial usage.
+- Evaluation: `pokeverse compare` runs fixed tasks on a single-agent baseline and multi-agent variants; the optimizer runs only when a built team has vulnerabilities (`--optimize auto`).
 
 Phase 1 (Intelligent Pokédex) is complete on branch `phase-1`:
 
@@ -649,10 +656,10 @@ See `docs/PROGRESS.md` for detailed progress and next steps.
 
 ## 12. Immediate Next Steps
 
-1. Make type effectiveness a deterministic tool (the live eval run showed the agent getting it wrong from memory).
-2. Plan Phase 2 — Supervisor Agent and delegation — one step at a time.
+1. Plan Phase 3 — Battle Intelligence — starting with deterministic battle mechanics (no LLM), one step at a time.
+2. Phase 2 carry-overs: repeated runs per case in `pokeverse compare`; code-enforced team constraints (e.g. "Fire-only"); the Strands spike against the hand-built Supervisor.
 
-Implement Phase 2 one step at a time (see `docs/PROGRESS.md`), handing each step to the developer for review before starting the next.
+Implement Phase 3 one step at a time (see `docs/PROGRESS.md`), handing each step to the developer for review before starting the next.
 
 Wait for explicit instructions from the developer.
 

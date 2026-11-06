@@ -38,7 +38,14 @@ class LlmUnavailableError(LlmError):
 
 
 class LlmRequestError(LlmError):
-    """The request was rejected or the reply was malformed."""
+    """The request was rejected or the reply was malformed.
+
+    ``completion`` holds the usage and tool calls spent before the failure, when any.
+    """
+
+    def __init__(self, message: str, completion: Completion | None = None) -> None:
+        super().__init__(message)
+        self.completion = completion
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,38 +134,51 @@ class OpenAIChat:
         input_tokens = output_tokens = 0
         started = time.perf_counter()
 
-        for _ in range(max_tool_rounds + 1):
-            response = self._call({**request, "input": list(conversation) if tools else prompt})
-            round_input, round_output = _usage(response)
-            input_tokens += round_input
-            output_tokens += round_output
+        try:
+            for _ in range(max_tool_rounds + 1):
+                response = self._call({**request, "input": list(conversation) if tools else prompt})
+                round_input, round_output = _usage(response)
+                input_tokens += round_input
+                output_tokens += round_output
 
-            function_calls = _function_calls(response) if tools else []
-            if not function_calls:
-                return _completion(
-                    response,
+                function_calls = _function_calls(response) if tools else []
+                if not function_calls:
+                    return _completion(
+                        response,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        latency_ms=round((time.perf_counter() - started) * 1000),
+                        tool_calls=tuple(tool_calls),
+                        data=_structured_data(response) if output_schema else None,
+                    )
+
+                # Reasoning items must be sent back together with the tool results.
+                _raise_if_cut_off(response)
+                conversation += response.output
+                for item in function_calls:
+                    call = _run_tool(tools_by_name, item)
+                    tool_calls.append(call)
+                    conversation.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": item.call_id,
+                            "output": json.dumps(call.output),
+                        }
+                    )
+
+            raise LlmRequestError(f"Model still requesting tools after {max_tool_rounds} rounds")
+        except LlmRequestError as error:
+            if error.completion is None:
+                error.completion = Completion(
+                    text="",
+                    model_id=settings.model_id,
+                    stop_reason="failed",
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     latency_ms=round((time.perf_counter() - started) * 1000),
                     tool_calls=tuple(tool_calls),
-                    data=_structured_data(response) if output_schema else None,
                 )
-
-            # Reasoning items must be sent back together with the tool results.
-            _raise_if_cut_off(response)
-            conversation += response.output
-            for item in function_calls:
-                call = _run_tool(tools_by_name, item)
-                tool_calls.append(call)
-                conversation.append(
-                    {
-                        "type": "function_call_output",
-                        "call_id": item.call_id,
-                        "output": json.dumps(call.output),
-                    }
-                )
-
-        raise LlmRequestError(f"Model still requesting tools after {max_tool_rounds} rounds")
+            raise
 
     def _call(self, request: dict[str, Any]) -> Any:
         try:

@@ -8,7 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from pokeverse import cli
-from pokeverse.agents import POKEDEX_ANSWER_SCHEMA
+from pokeverse.agents import POKEDEX_ANSWER_SCHEMA, TEAM_PROPOSAL_SCHEMA
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.cli import (
     EXIT_AUTH,
@@ -147,6 +147,53 @@ def test_list_empty_catalog(db: str) -> None:
     assert "empty" in result.stdout
 
 
+def test_team_prints_analysis(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "team", "Pikachu", "charizard")
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines[0] == "Team: Pikachu, Charizard"
+    assert lines[1] == "Vulnerable to: none"
+    assert lines[2].startswith("Unresisted attack types: normal, water")
+    assert lines[3].startswith("Offensive gaps (STAB): normal, fire")
+
+
+def test_team_json(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "team", "25", "6", "--json")
+
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)
+    assert [member["name"] for member in data["team"]["members"]] == ["pikachu", "charizard"]
+    assert data["vulnerabilities"] == []
+
+
+def test_team_allows_repeated_pokemon(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "team", "pikachu", "Pikachu", "--json")
+
+    assert result.exit_code == 0
+    ground = next(
+        e for e in json.loads(result.stdout)["vulnerabilities"] if e["attacking_type"] == "ground"
+    )
+    assert ground["weak"] == ["pikachu", "pikachu"]
+    assert upstream.requests == ["/api/v2/pokemon/pikachu"]
+
+
+def test_team_unknown_pokemon_exits_not_found(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "team", "pikachu", "missingno")
+
+    assert result.exit_code == EXIT_NOT_FOUND
+    assert result.stdout == ""
+    assert "does not exist" in result.stderr
+
+
+def test_team_size_is_checked_before_any_lookup(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "team", *["pikachu"] * 7)
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "at most 6" in result.stderr
+    assert upstream.requests == []
+
+
 def test_list_shows_stored_pokemon_in_pokedex_order(db: str, upstream: Upstream) -> None:
     invoke(db, "pokemon", "pikachu")
     invoke(db, "pokemon", "charizard")
@@ -188,6 +235,7 @@ class FakeChat:
     calls: list[dict[str, object]] = []
     error: Exception | None = None
     data: dict[str, Any] | None = None
+    analyzed: list[str] | None = None
 
     def __init__(self, settings: object = None) -> None:
         pass
@@ -198,14 +246,29 @@ class FakeChat:
         FakeChat.calls.append({"prompt": prompt, **kwargs})
         if FakeChat.error is not None:
             raise FakeChat.error
-        tool_calls = tuple(
-            ToolCall(tool.name, {"name_or_id": "Pikachu"}, tool.handler(name_or_id="Pikachu"))
-            for tool in kwargs.get("tools", ())
-        )
+        tool_calls = []
+        for tool in kwargs.get("tools", ()):
+            arguments = FakeChat.arguments_for(tool)
+            tool_calls.append(ToolCall(tool.name, arguments, tool.handler(**arguments)))
         data = FakeChat.data if kwargs.get("output_schema") else None
         return Completion(
-            "Pikachu is Electric-type.", "fake-model", "end_turn", 10, 5, 42, tool_calls, data
+            "Pikachu is Electric-type.",
+            "fake-model",
+            "end_turn",
+            10,
+            5,
+            42,
+            tuple(tool_calls),
+            data,
         )
+
+    @staticmethod
+    def arguments_for(tool: Any) -> dict[str, Any]:
+        if "name_or_id" in tool.parameters["properties"]:
+            return {"name_or_id": "Pikachu"}
+        if FakeChat.analyzed is not None:
+            return {"names": FakeChat.analyzed}
+        return {"names": [m["name"] for m in (FakeChat.data or {}).get("members", [])]}
 
 
 @pytest.fixture
@@ -215,6 +278,7 @@ def fake_chat(
     FakeChat.calls = []
     FakeChat.error = None
     FakeChat.data = None
+    FakeChat.analyzed = None
     monkeypatch.setattr(cli, "OpenAIChat", FakeChat)
     monkeypatch.setenv("POKEVERSE_DB", str(tmp_path / "ask.db"))
     return FakeChat
@@ -274,14 +338,16 @@ def test_ask_usage_goes_to_stderr(fake_chat: type[FakeChat]) -> None:
     assert "latency=42ms" in result.stderr
 
 
-def test_ask_gives_model_the_catalog_tool(fake_chat: type[FakeChat], upstream: Upstream) -> None:
+def test_ask_gives_model_the_catalog_tools(fake_chat: type[FakeChat], upstream: Upstream) -> None:
     result = runner.invoke(app, ["ask", "What type is Pikachu?", "--usage"])
 
     assert result.exit_code == 0
-    (tool,) = fake_chat.calls[0]["tools"]  # type: ignore[misc]
-    assert tool.name == "get_pokemon"
+    tools = fake_chat.calls[0]["tools"]
+    assert [tool.name for tool in tools] == ["get_pokemon", "get_type_matchups"]  # type: ignore[attr-defined]
+    # The second lookup is served from the local catalog.
     assert upstream.requests == ["/api/v2/pokemon/pikachu"]
     assert '[tool] get_pokemon({"name_or_id": "Pikachu"}) -> {"pokedex_id": 25' in result.stderr
+    assert '"weak_to": {"ground": 2.0}' in result.stderr
 
 
 def test_ask_without_tools(fake_chat: type[FakeChat], upstream: Upstream) -> None:
@@ -380,3 +446,249 @@ def test_eval_rejects_unknown_case(fake_chat: type[FakeChat]) -> None:
     assert result.exit_code == EXIT_INVALID_INPUT
     assert "unknown case" in result.stderr
     assert fake_chat.calls == []
+
+
+TEAM_PROPOSAL = {
+    "members": [
+        {"name": "pikachu", "role": "fast electric attacker"},
+        {"name": "charizard", "role": "fire coverage"},
+    ],
+    "summary": "Pikachu leads; Charizard handles Ground threats.",
+}
+
+
+def test_build_prints_team_summary_and_our_analysis(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = TEAM_PROPOSAL
+
+    result = runner.invoke(app, ["build", "A team around Pikachu"])
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines[0].split() == ["Pikachu", "electric", "fast", "electric", "attacker"]
+    assert lines[1].split()[:2] == ["Charizard", "fire/flying"]
+    assert "Pikachu leads; Charizard handles Ground threats." in lines
+    assert "Vulnerable to: none" in lines
+    assert result.stderr == ""
+    assert fake_chat.calls[0]["output_schema"] is TEAM_PROPOSAL_SCHEMA
+
+
+def test_build_json(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = TEAM_PROPOSAL
+
+    result = runner.invoke(app, ["build", "A team around Pikachu", "--json"])
+
+    data = json.loads(result.stdout)
+    assert data["members"] == TEAM_PROPOSAL["members"]
+    assert data["self_checked"] is True
+    assert data["analysis"]["vulnerabilities"] == []
+    assert "exposures" not in data["analysis"]
+
+
+def test_build_warns_when_final_team_was_not_analyzed(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = TEAM_PROPOSAL
+    fake_chat.analyzed = ["pikachu"]
+
+    result = runner.invoke(app, ["build", "A team around Pikachu"])
+
+    assert result.exit_code == 0
+    assert "did not analyze this exact team" in result.stderr
+
+
+def test_build_rejects_invented_pokemon(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = {**TEAM_PROPOSAL, "members": [{"name": "pikablu", "role": "x"}]}
+    fake_chat.analyzed = ["pikachu"]
+
+    result = runner.invoke(app, ["build", "A team around Pikachu"])
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "does not exist" in result.stderr
+
+
+OPTIMIZER_REPLY = {
+    "claims": [{"member": "charizard", "attacking_type": "rock", "claimed": "resists"}],
+    "swaps": [{"out": "pikachu", "in": "charizard", "reason": "Ground immunity"}],
+    "critique": "Two Pikachu share a Ground weakness.",
+}
+
+
+def test_optimize_applies_improving_swap_and_flags_wrong_claim(
+    fake_chat: type[FakeChat],
+) -> None:
+    fake_chat.data = OPTIMIZER_REPLY
+
+    result = runner.invoke(app, ["optimize", "pikachu", "pikachu", "--notes", "x"])
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines[0].startswith("Before: pikachu, pikachu")
+    assert lines[1].startswith("  ACCEPTED pikachu -> charizard: Ground immunity [improved")
+    assert lines[2].startswith("After:  charizard, pikachu")
+    assert "Vulnerable to: none" in lines
+    assert "  WRONG charizard vs rock: claimed resists, actually weak (4x)" in lines
+    assert lines[-1] == "Two Pikachu share a Ground weakness."
+
+
+def test_optimize_respects_keep(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = OPTIMIZER_REPLY
+
+    result = runner.invoke(app, ["optimize", "pikachu", "pikachu", "--keep", "Pikachu", "--json"])
+
+    data = json.loads(result.stdout)
+    assert data["final_members"] == ["pikachu", "pikachu"]
+    assert data["swaps"][0]["accepted"] is False
+    assert "keep this member" in data["swaps"][0]["verdict"]
+
+
+def test_optimize_unknown_member_exits_not_found(fake_chat: type[FakeChat]) -> None:
+    result = runner.invoke(app, ["optimize", "pikachu", "missingno"])
+
+    assert result.exit_code == EXIT_NOT_FOUND
+    assert fake_chat.calls == []
+
+
+def canned_supervisor_result() -> Any:
+    from pokeverse.agents import Delegation, SupervisorResult
+    from pokeverse.llm import Completion
+
+    research = Completion("", "fake", "completed", 30, 10, 5)
+    return SupervisorResult(
+        answer="Pikachu is Electric-type.",
+        delegations=(
+            Delegation("research", "What type is Pikachu?", {"answer": "Electric"}, None, research),
+            Delegation("team_builder", "Team around Pikachu", error="Model reply failed"),
+        ),
+        completion=Completion("Pikachu is Electric-type.", "fake-model", "completed", 100, 20, 9),
+    )
+
+
+@pytest.fixture
+def fake_supervisor(monkeypatch: pytest.MonkeyPatch, fake_chat: type[FakeChat]) -> list[str]:
+    from pokeverse.agents.supervisor import OPTIMIZE_MODES
+
+    requests: list[str] = []
+
+    class FakeSupervisor:
+        def __init__(self, chat: object, catalog: object, *, optimize: str) -> None:
+            if optimize not in OPTIMIZE_MODES:
+                raise ValueError(f"optimize must be one of {', '.join(OPTIMIZE_MODES)}")
+            self.optimize = optimize
+
+        def run(self, request: str) -> Any:
+            requests.append(f"{request} [{self.optimize}]")
+            return canned_supervisor_result()
+
+    monkeypatch.setattr(cli, "Supervisor", FakeSupervisor)
+    return requests
+
+
+def test_advise_passes_optimize_mode(fake_supervisor: list[str]) -> None:
+    runner.invoke(app, ["advise", "q", "--optimize", "never"])
+
+    assert fake_supervisor == ["q [never]"]
+
+
+def test_advise_rejects_unknown_optimize_mode(fake_supervisor: list[str]) -> None:
+    result = runner.invoke(app, ["advise", "q", "--optimize", "sometimes"])
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "never, auto, always" in result.stderr
+    assert fake_supervisor == []
+
+
+def test_advise_prints_answer(fake_supervisor: list[str]) -> None:
+    result = runner.invoke(app, ["advise", "What type is Pikachu?"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "Pikachu is Electric-type.\n"
+    assert result.stderr == ""
+    assert fake_supervisor == ["What type is Pikachu? [auto]"]
+
+
+def test_advise_usage_shows_delegations_and_token_split(fake_supervisor: list[str]) -> None:
+    result = runner.invoke(app, ["advise", "q", "--usage"])
+
+    lines = result.stderr.splitlines()
+    assert lines[0] == "[delegate] research: 'What type is Pikachu?' -> ok (40 tokens)"
+    assert lines[1].startswith("[delegate] team_builder: 'Team around Pikachu' -> error:")
+    assert "supervisor=120 specialists=40 total=160" in lines[2]
+
+
+def test_advise_json(fake_supervisor: list[str]) -> None:
+    result = runner.invoke(app, ["advise", "q", "--json"])
+
+    data = json.loads(result.stdout)
+    assert data["answer"] == "Pikachu is Electric-type."
+    assert [d["agent"] for d in data["delegations"]] == ["research", "team_builder"]
+    assert data["usage"]["total_tokens"] == 160
+
+
+@pytest.fixture
+def fake_compare(monkeypatch: pytest.MonkeyPatch, fake_chat: type[FakeChat]) -> list[tuple]:
+    from pokeverse.evals.compare import RunOutcome
+
+    calls: list[tuple] = []
+
+    def compare_case(system: str, case: Any, chat: object, catalog: object) -> RunOutcome:
+        calls.append((case.id, system))
+        failures = () if system == "multi" else ("nobody resists ice",)
+        return RunOutcome(case, system, failures, tokens=1000, latency_ms=2000)
+
+    monkeypatch.setattr(cli, "compare_case", compare_case)
+    return calls
+
+
+def test_compare_runs_selected_cases_and_systems(fake_compare: list[tuple]) -> None:
+    result = runner.invoke(
+        app,
+        ["compare", "--case", "gengar-fact", "--system", "multi", "--system", "single"],
+    )
+
+    assert result.exit_code == 0
+    assert fake_compare == [("gengar-fact", "single"), ("gengar-fact", "multi")]
+    lines = result.stdout.splitlines()
+    assert lines[0].startswith(f"FAIL {'gengar-fact':<14} single")
+    assert lines[1] == "     - nobody resists ice"
+    assert lines[2].startswith(f"PASS {'gengar-fact':<14} multi")
+    assert "single     passed 0/1 | tokens 1000 (avg 1000) | avg latency 2.0s" in lines
+    assert "multi      passed 1/1 | tokens 1000 (avg 1000) | avg latency 2.0s" in lines
+
+
+def test_compare_json(fake_compare: list[tuple]) -> None:
+    result = runner.invoke(app, ["compare", "--case", "fire-only", "--json"])
+
+    data = json.loads(result.stdout)
+    assert [run["system"] for run in data["runs"]] == ["single", "multi", "multi+auto", "multi+opt"]
+    assert [row["passed"] for row in data["summary"]] == [0, 1, 0, 0]
+    assert data["aborted"] is None
+    assert "PASS fire-only" in result.stderr
+
+
+def test_compare_keeps_partial_results_when_aborted(
+    monkeypatch: pytest.MonkeyPatch, fake_compare: list[tuple]
+) -> None:
+    from pokeverse.llm import LlmUnavailableError
+
+    first = cli.compare_case
+
+    def flaky(system: str, case: Any, chat: object, catalog: object) -> Any:
+        if system == "multi":
+            raise LlmUnavailableError("rate limited")
+        return first(system, case, chat, catalog)
+
+    monkeypatch.setattr(cli, "compare_case", flaky)
+
+    result = runner.invoke(app, ["compare", "--case", "fire-only", "--json"])
+
+    assert result.exit_code == EXIT_UPSTREAM_UNAVAILABLE
+    data = json.loads(result.stdout)
+    assert [run["system"] for run in data["runs"]] == ["single"]
+    assert data["aborted"] == "rate limited"
+    assert "Error: rate limited" in result.stderr
+
+
+def test_compare_rejects_unknown_case_or_system(fake_compare: list[tuple]) -> None:
+    result = runner.invoke(app, ["compare", "--case", "nope", "--system", "solo"])
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "['nope', 'solo']" in result.stderr
+    assert fake_compare == []
