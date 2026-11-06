@@ -16,6 +16,7 @@ from pokeverse.agents import (
     POKEDEX_ANSWER_SCHEMA,
     PokedexAnswer,
     ResearchAgent,
+    Supervisor,
     TeamCompositionAgent,
     make_catalog_tools,
     normalize_pokemon_identifier,
@@ -231,6 +232,39 @@ def build_command(
         typer.echo("Warning: the agent did not analyze this exact team before answering", err=True)
     if show_usage:
         print_usage(result.completion)
+
+
+@app.command("advise")
+def advise_command(
+    ctx: typer.Context,
+    request: Annotated[str, typer.Argument(help="Any Pokémon question or team request.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    show_usage: Annotated[
+        bool, typer.Option("--usage", help="Print delegations and token usage to stderr.")
+    ] = False,
+) -> None:
+    """Ask the Supervisor, which delegates to the Research and Team Composition agents."""
+    settings: Settings = ctx.obj
+    with llm_errors():
+        chat = OpenAIChat(LlmSettings.from_env())
+        with open_catalog(settings, offline=False) as catalog:
+            result = Supervisor(chat, catalog).run(request)
+
+    typer.echo(json.dumps(result.to_dict()) if as_json else result.answer)
+    if show_usage:
+        for delegation in result.delegations:
+            outcome = f"error: {delegation.error}" if delegation.error else "ok"
+            typer.echo(
+                f"[delegate] {delegation.agent}: {delegation.task!r} -> {outcome} "
+                f"({delegation.tokens} tokens)",
+                err=True,
+            )
+        typer.echo(
+            f"[{result.completion.model_id}] tokens supervisor={result.completion.total_tokens} "
+            f"specialists={result.specialist_tokens} total={result.total_tokens} "
+            f"latency={result.completion.latency_ms}ms",
+            err=True,
+        )
 
 
 @app.command("ask")

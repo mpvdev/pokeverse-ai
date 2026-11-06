@@ -72,9 +72,11 @@ Deliverable: a multi-agent Pokémon team advisor.
 
 - [x] Step 3: Team Composition Agent — `TeamCompositionAgent.build(request)` with `get_pokemon`, `get_type_matchups` and a new deterministic `analyze_team` tool (compact analysis, errors as data); strict `TeamProposal` output (members with roles + summary), validated in Python; our code resolves every member through the catalog (invented Pokémon → `LlmRequestError`), runs its own `analyze_team`, and reports `self_checked` (did the agent analyze exactly the final team). `pokeverse build "<request>" [--json] [--usage]`. Live: "balanced team of 6 around Pikachu" → no vulnerabilities, self-checked, routed around two PokéAPI timeouts, ~5.3k tokens / 34 s cold. Known gap: on "4 Fire-types only" it accepted its first draft (one `analyze_team` call) with three Fire/Dragon members, adding an avoidable Dragon vulnerability while calling the weaknesses unavoidable — the target for Step 6 (Team Optimization) and the baseline for Step 7.
 
+- [x] Step 4: Supervisor Agent — `Supervisor.run(request)` exposes the Research and Team Composition agents as tools (`ask_research_agent`, `ask_team_builder`, each taking a self-contained `task`). Specialist failures (`LlmRequestError`, `ValueError`) return to the supervisor as error data; auth/outage errors abort. `SupervisorResult` records the observed delegations (agent, task, output or error, tokens) and splits token usage between supervisor and specialists. `pokeverse advise "<request>" [--json] [--usage]`. Live: research-only (2.3k tokens, 8.5 s), research → team build in sequence (16.6k tokens, 46 s; team builder alone 13k), off-topic declined without delegating (0.35k). Observations for Step 5: specialists do not share findings (the team builder re-derived Garchomp's weaknesses the Research Agent had just found), and the supervisor's task rewriting can widen the question (it asked for generation caveats nobody requested).
+
 ## Next Up
 
-- Phase 2, Step 4: Supervisor Agent and delegation (routes a request to the Research or Team Composition agent).
+- Phase 2, Step 5: shared context and handoffs (pass one specialist's verified findings to the next; trace who did what).
 
 ## Running Locally
 
@@ -94,4 +96,5 @@ uv run pokeverse research "What type is Mr. Mime?" --usage       # Research Agen
 uv run pokeverse eval                                            # evaluation suite (live, costs tokens)
 uv run pokeverse team charizard blastoise venusaur              # deterministic team analysis
 uv run pokeverse build "A balanced team of 6 around Pikachu"    # Team Composition Agent
+uv run pokeverse advise "Is Gengar weak to Psychic?" --usage    # Supervisor (delegates)
 ```

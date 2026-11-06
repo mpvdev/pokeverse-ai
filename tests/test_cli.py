@@ -502,3 +502,61 @@ def test_build_rejects_invented_pokemon(fake_chat: type[FakeChat]) -> None:
 
     assert result.exit_code == EXIT_INVALID_INPUT
     assert "does not exist" in result.stderr
+
+
+def canned_supervisor_result() -> Any:
+    from pokeverse.agents import Delegation, SupervisorResult
+    from pokeverse.llm import Completion
+
+    research = Completion("", "fake", "completed", 30, 10, 5)
+    return SupervisorResult(
+        answer="Pikachu is Electric-type.",
+        delegations=(
+            Delegation("research", "What type is Pikachu?", {"answer": "Electric"}, None, research),
+            Delegation("team_builder", "Team around Pikachu", error="Model reply failed"),
+        ),
+        completion=Completion("Pikachu is Electric-type.", "fake-model", "completed", 100, 20, 9),
+    )
+
+
+@pytest.fixture
+def fake_supervisor(monkeypatch: pytest.MonkeyPatch, fake_chat: type[FakeChat]) -> list[str]:
+    requests: list[str] = []
+
+    class FakeSupervisor:
+        def __init__(self, chat: object, catalog: object) -> None:
+            pass
+
+        def run(self, request: str) -> Any:
+            requests.append(request)
+            return canned_supervisor_result()
+
+    monkeypatch.setattr(cli, "Supervisor", FakeSupervisor)
+    return requests
+
+
+def test_advise_prints_answer(fake_supervisor: list[str]) -> None:
+    result = runner.invoke(app, ["advise", "What type is Pikachu?"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "Pikachu is Electric-type.\n"
+    assert result.stderr == ""
+    assert fake_supervisor == ["What type is Pikachu?"]
+
+
+def test_advise_usage_shows_delegations_and_token_split(fake_supervisor: list[str]) -> None:
+    result = runner.invoke(app, ["advise", "q", "--usage"])
+
+    lines = result.stderr.splitlines()
+    assert lines[0] == "[delegate] research: 'What type is Pikachu?' -> ok (40 tokens)"
+    assert lines[1].startswith("[delegate] team_builder: 'Team around Pikachu' -> error:")
+    assert "supervisor=120 specialists=40 total=160" in lines[2]
+
+
+def test_advise_json(fake_supervisor: list[str]) -> None:
+    result = runner.invoke(app, ["advise", "q", "--json"])
+
+    data = json.loads(result.stdout)
+    assert data["answer"] == "Pikachu is Electric-type."
+    assert [d["agent"] for d in data["delegations"]] == ["research", "team_builder"]
+    assert data["usage"]["total_tokens"] == 160
