@@ -13,27 +13,37 @@ from pokeverse.catalog import PokemonCatalog, PokemonNotInCatalogError
 from pokeverse.llm import Completion, LlmRequestError, Tool
 from pokeverse.teams import MAX_TEAM_SIZE, Team
 
-SUPERVISOR_SYSTEM_PROMPT = (
-    "You are the PokéVerse Supervisor. You coordinate specialist agents and never answer "
-    "Pokémon facts or build teams yourself. "
-    "Use ask_research_agent for facts about specific Pokémon: types, Pokédex numbers, "
-    "weaknesses, resistances and type matchups. "
-    "Use ask_team_builder to build or propose a team. "
+OPTIMIZER_INSTRUCTIONS = (
     "Use ask_team_optimizer to review and improve a team: after ask_team_builder returns a "
     "team, call it with the member names, the user's goal, the Pokémon the user explicitly "
     "required under `keep`, and the builder's member roles and summary as `notes`; also use it "
     "when the user asks to improve a team they already have. Present the optimizer's final "
     "team, mention accepted swaps, and correct any claims it found to be wrong. "
-    "Specialists cannot see the user's message: give each one a complete, self-contained task "
-    "with every constraint the user stated, and do not add requirements the user did not ask "
-    "for. If a request needs both, call both, and split it: give the Research Agent only the "
-    "factual question and the Team Composition Agent only the team request. Facts found by one "
-    "specialist are passed to the next automatically, so you do not need to repeat them. "
-    "Base your final answer only on specialist results; if a specialist reports an error, "
-    "ungrounded claims or a team it did not check, say so. "
-    "If the request is not about Pokémon, briefly say what PokéVerse can help with and do not "
-    "call a specialist. Answer concisely in plain text."
 )
+
+
+def supervisor_prompt(optimize: bool) -> str:
+    return (
+        "You are the PokéVerse Supervisor. You coordinate specialist agents and never answer "
+        "Pokémon facts or build teams yourself. "
+        "Use ask_research_agent for facts about specific Pokémon: types, Pokédex numbers, "
+        "weaknesses, resistances and type matchups. "
+        "Use ask_team_builder to build or propose a team. "
+        + (OPTIMIZER_INSTRUCTIONS if optimize else "")
+        + "Specialists cannot see the user's message: give each one a complete, self-contained "
+        "task with every constraint the user stated, and do not add requirements the user did "
+        "not ask for. If a request needs both, call both, and split it: give the Research Agent "
+        "only the factual question and the Team Composition Agent only the team request. Facts "
+        "found by one specialist are passed to the next automatically, so you do not need to "
+        "repeat them. "
+        "Base your final answer only on specialist results; if a specialist reports an error, "
+        "ungrounded claims or a team it did not check, say so. "
+        "If the request is not about Pokémon, briefly say what PokéVerse can help with and do "
+        "not call a specialist. Answer concisely in plain text."
+    )
+
+
+SUPERVISOR_SYSTEM_PROMPT = supervisor_prompt(optimize=True)
 SUPERVISOR_MAX_TOKENS = 1000
 
 TASK_PARAMETERS = {
@@ -130,11 +140,12 @@ class SupervisorResult:
 
 
 class Supervisor:
-    """Delegates to the Research, Team Composition and Team Optimization agents."""
+    """Delegates to the Research, Team Composition and (optionally) Team Optimization agents."""
 
-    def __init__(self, chat: ChatModel, catalog: PokemonCatalog) -> None:
+    def __init__(self, chat: ChatModel, catalog: PokemonCatalog, *, optimize: bool = True) -> None:
         self._chat = chat
         self._catalog = catalog
+        self._optimize_teams = optimize
         self._research = ResearchAgent(chat, catalog)
         self._team_builder = TeamCompositionAgent(chat, catalog)
         self._optimizer = TeamOptimizationAgent(chat, catalog)
@@ -225,9 +236,11 @@ class Supervisor:
                 ),
             ),
         )
+        if not self._optimize_teams:
+            tools = tools[:2]
         completion = self._chat.complete(
             request,
-            system=SUPERVISOR_SYSTEM_PROMPT,
+            system=supervisor_prompt(self._optimize_teams),
             max_tokens=SUPERVISOR_MAX_TOKENS,
             tools=tools,
         )

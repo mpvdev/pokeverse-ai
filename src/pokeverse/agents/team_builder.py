@@ -25,7 +25,8 @@ TEAM_BUILDER_SYSTEM_PROMPT = (
     "any weaknesses you could not remove; do not claim coverage the analysis did not report."
 )
 TEAM_BUILDER_MAX_TOOL_ROUNDS = 8
-TEAM_BUILDER_MAX_TOKENS = 1500
+# Reasoning tokens count against this limit; constrained requests need more reasoning.
+TEAM_BUILDER_MAX_TOKENS = 3000
 
 TEAM_PROPOSAL_SCHEMA = OutputSchema(
     name="team_proposal",

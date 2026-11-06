@@ -31,6 +31,8 @@ from pokeverse.catalog import (
 )
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.evals import RESEARCH_CASES, EvalResult, run_case
+from pokeverse.evals.compare import COMPARE_CASES, SYSTEMS
+from pokeverse.evals.compare import run_case as compare_case
 from pokeverse.llm import (
     Completion,
     LlmAuthError,
@@ -483,6 +485,89 @@ def eval_command(
     )
     if passed != len(results):
         raise typer.Exit(EXIT_EVAL_FAILED)
+
+
+@app.command("compare")
+def compare_command(
+    ctx: typer.Context,
+    case_ids: Annotated[
+        list[str] | None, typer.Option("--case", help="Run only this case id (repeatable).")
+    ] = None,
+    systems: Annotated[
+        list[str] | None,
+        typer.Option("--system", help=f"Run only this system (repeatable): {', '.join(SYSTEMS)}."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+) -> None:
+    """Compare single- and multi-agent systems on fixed tasks (live; costs many tokens)."""
+    settings: Settings = ctx.obj
+    known = {case.id: case for case in COMPARE_CASES}
+    unknown = [c for c in case_ids or () if c not in known] + [
+        s for s in systems or () if s not in SYSTEMS
+    ]
+    if unknown:
+        raise fail(
+            f"unknown case/system {unknown}; cases: {sorted(known)}; systems: {list(SYSTEMS)}",
+            EXIT_INVALID_INPUT,
+        )
+    cases = [known[c] for c in case_ids] if case_ids else list(COMPARE_CASES)
+    chosen = [s for s in SYSTEMS if s in systems] if systems else list(SYSTEMS)
+
+    outcomes = []
+    aborted: Exception | None = None
+    with llm_errors():
+        chat = OpenAIChat(LlmSettings.from_env())
+        with open_catalog(settings, offline=False) as catalog:
+            for case in cases:
+                for system in chosen:
+                    try:
+                        outcome = compare_case(system, case, chat, catalog)
+                    except (LlmAuthError, LlmUnavailableError, UpstreamUnavailableError) as error:
+                        aborted = error
+                        break
+                    outcomes.append(outcome)
+                    status = "PASS" if outcome.passed else "FAIL"
+                    score = outcome.analysis.score if outcome.analysis else "-"
+                    # With --json, progress goes to stderr so stdout stays valid JSON.
+                    typer.echo(
+                        f"{status} {case.id:<14} {system:<10} {outcome.tokens:>6} tok "
+                        f"{outcome.latency_ms / 1000:>5.1f}s  score {score}",
+                        err=as_json,
+                    )
+                    for failure in outcome.failures:
+                        typer.echo(f"     - {failure}", err=as_json)
+                if aborted:
+                    break
+
+    summary = []
+    for system in chosen:
+        runs = [o for o in outcomes if o.system == system]
+        if not runs:
+            continue
+        summary.append(
+            {
+                "system": system,
+                "passed": sum(o.passed for o in runs),
+                "runs": len(runs),
+                "tokens": sum(o.tokens for o in runs),
+                "avg_latency_ms": sum(o.latency_ms for o in runs) // len(runs),
+            }
+        )
+    if as_json:
+        report = {"runs": [o.to_dict() for o in outcomes], "summary": summary}
+        typer.echo(json.dumps({**report, "aborted": str(aborted) if aborted else None}))
+    else:
+        typer.echo("")
+        for row in summary:
+            typer.echo(
+                f"{row['system']:<10} passed {row['passed']}/{row['runs']} | "
+                f"tokens {row['tokens']} (avg {row['tokens'] // row['runs']}) | "
+                f"avg latency {row['avg_latency_ms'] / 1000:.1f}s"
+            )
+    if aborted:
+        # Re-raise through the usual mapping so the exit code reflects the cause.
+        with llm_errors():
+            raise aborted
 
 
 def run() -> None:

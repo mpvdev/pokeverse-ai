@@ -5,7 +5,7 @@ import pytest
 
 from pokeverse.agents import RESEARCH_SYSTEM_PROMPT, Supervisor
 from pokeverse.agents.optimizer import OPTIMIZER_SYSTEM_PROMPT
-from pokeverse.agents.supervisor import SUPERVISOR_SYSTEM_PROMPT
+from pokeverse.agents.supervisor import SUPERVISOR_SYSTEM_PROMPT, supervisor_prompt
 from pokeverse.agents.team_builder import TEAM_BUILDER_SYSTEM_PROMPT
 from pokeverse.catalog import Pokemon, PokemonCatalog, PokemonType, SqlitePokemonRepository
 from pokeverse.llm import Completion, LlmRequestError, ToolCall
@@ -65,6 +65,22 @@ def test_supervisor_exposes_specialists_as_tools(catalog: PokemonCatalog) -> Non
     Supervisor(chat, catalog).run("Hi")
 
     assert chat.prompts == [(SUPERVISOR_SYSTEM_PROMPT, "Hi")]
+
+
+def test_supervisor_without_optimizer(catalog: PokemonCatalog) -> None:
+    seen: dict[str, Any] = {}
+
+    class Recorder:
+        def complete(self, prompt: str, **kwargs: Any) -> Completion:
+            seen.update(kwargs)
+            return Completion("Answer.", "fake", "completed", 1, 1, 1)
+
+    Supervisor(Recorder(), catalog, optimize=False).run("Hi")
+
+    assert [tool.name for tool in seen["tools"]] == ["ask_research_agent", "ask_team_builder"]
+    assert seen["system"] == supervisor_prompt(optimize=False)
+    assert "ask_team_optimizer" not in seen["system"]
+    assert supervisor_prompt(optimize=True) == SUPERVISOR_SYSTEM_PROMPT
 
 
 OPTIMIZE = {"members": ["Pikachu"], "goal": "strong", "keep": ["pikachu"], "notes": "Lead."}

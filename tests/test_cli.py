@@ -602,3 +602,75 @@ def test_advise_json(fake_supervisor: list[str]) -> None:
     assert data["answer"] == "Pikachu is Electric-type."
     assert [d["agent"] for d in data["delegations"]] == ["research", "team_builder"]
     assert data["usage"]["total_tokens"] == 160
+
+
+@pytest.fixture
+def fake_compare(monkeypatch: pytest.MonkeyPatch, fake_chat: type[FakeChat]) -> list[tuple]:
+    from pokeverse.evals.compare import RunOutcome
+
+    calls: list[tuple] = []
+
+    def compare_case(system: str, case: Any, chat: object, catalog: object) -> RunOutcome:
+        calls.append((case.id, system))
+        failures = () if system == "multi" else ("nobody resists ice",)
+        return RunOutcome(case, system, failures, tokens=1000, latency_ms=2000)
+
+    monkeypatch.setattr(cli, "compare_case", compare_case)
+    return calls
+
+
+def test_compare_runs_selected_cases_and_systems(fake_compare: list[tuple]) -> None:
+    result = runner.invoke(
+        app,
+        ["compare", "--case", "gengar-fact", "--system", "multi", "--system", "single"],
+    )
+
+    assert result.exit_code == 0
+    assert fake_compare == [("gengar-fact", "single"), ("gengar-fact", "multi")]
+    lines = result.stdout.splitlines()
+    assert lines[0].startswith(f"FAIL {'gengar-fact':<14} single")
+    assert lines[1] == "     - nobody resists ice"
+    assert lines[2].startswith(f"PASS {'gengar-fact':<14} multi")
+    assert "single     passed 0/1 | tokens 1000 (avg 1000) | avg latency 2.0s" in lines
+    assert "multi      passed 1/1 | tokens 1000 (avg 1000) | avg latency 2.0s" in lines
+
+
+def test_compare_json(fake_compare: list[tuple]) -> None:
+    result = runner.invoke(app, ["compare", "--case", "fire-only", "--json"])
+
+    data = json.loads(result.stdout)
+    assert [run["system"] for run in data["runs"]] == ["single", "multi", "multi+opt"]
+    assert [row["passed"] for row in data["summary"]] == [0, 1, 0]
+    assert data["aborted"] is None
+    assert "PASS fire-only" in result.stderr
+
+
+def test_compare_keeps_partial_results_when_aborted(
+    monkeypatch: pytest.MonkeyPatch, fake_compare: list[tuple]
+) -> None:
+    from pokeverse.llm import LlmUnavailableError
+
+    first = cli.compare_case
+
+    def flaky(system: str, case: Any, chat: object, catalog: object) -> Any:
+        if system == "multi":
+            raise LlmUnavailableError("rate limited")
+        return first(system, case, chat, catalog)
+
+    monkeypatch.setattr(cli, "compare_case", flaky)
+
+    result = runner.invoke(app, ["compare", "--case", "fire-only", "--json"])
+
+    assert result.exit_code == EXIT_UPSTREAM_UNAVAILABLE
+    data = json.loads(result.stdout)
+    assert [run["system"] for run in data["runs"]] == ["single"]
+    assert data["aborted"] == "rate limited"
+    assert "Error: rate limited" in result.stderr
+
+
+def test_compare_rejects_unknown_case_or_system(fake_compare: list[tuple]) -> None:
+    result = runner.invoke(app, ["compare", "--case", "nope", "--system", "solo"])
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "['nope', 'solo']" in result.stderr
+    assert fake_compare == []
