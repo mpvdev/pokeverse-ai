@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 
 from pokeverse.agents import RESEARCH_SYSTEM_PROMPT, Supervisor
+from pokeverse.agents.optimizer import OPTIMIZER_SYSTEM_PROMPT
 from pokeverse.agents.supervisor import SUPERVISOR_SYSTEM_PROMPT
 from pokeverse.agents.team_builder import TEAM_BUILDER_SYSTEM_PROMPT
 from pokeverse.catalog import Pokemon, PokemonCatalog, PokemonType, SqlitePokemonRepository
@@ -19,7 +20,7 @@ class RoutingChat:
 
     def __init__(
         self,
-        delegate_to: list[tuple[str, str]],
+        delegate_to: list[tuple[str, str | dict[str, Any]]],
         answer: str = "Final answer.",
         research: dict[str, Any] = GOOD_ANSWER,
     ) -> None:
@@ -33,14 +34,17 @@ class RoutingChat:
         self.prompts.append((system, prompt))
         if system == SUPERVISOR_SYSTEM_PROMPT:
             tools = {tool.name: tool for tool in kwargs["tools"]}
-            calls = tuple(
-                ToolCall(name, {"task": task}, tools[name].handler(task=task))
-                for name, task in self.delegate_to
-            )
-            return Completion(self.answer, "fake", "completed", 100, 20, 9, calls)
+            calls = []
+            for name, arguments in self.delegate_to:
+                args = arguments if isinstance(arguments, dict) else {"task": arguments}
+                calls.append(ToolCall(name, args, tools[name].handler(**args)))
+            return Completion(self.answer, "fake", "completed", 100, 20, 9, tuple(calls))
         if system == RESEARCH_SYSTEM_PROMPT:
             lookup = ToolCall("get_pokemon", {"name_or_id": "pikachu"}, PIKACHU.to_dict())
             return Completion("", "fake", "completed", 30, 10, 5, (lookup,), self.research)
+        if system == OPTIMIZER_SYSTEM_PROMPT:
+            review = {"claims": [], "swaps": [], "critique": "Fine."}
+            return Completion("", "fake", "completed", 60, 15, 5, (), review)
         assert system == TEAM_BUILDER_SYSTEM_PROMPT
         analyzed = ToolCall(
             "analyze_team", {"names": ["pikachu"]}, {"team": {"members": [PIKACHU.to_dict()]}}
@@ -61,6 +65,39 @@ def test_supervisor_exposes_specialists_as_tools(catalog: PokemonCatalog) -> Non
     Supervisor(chat, catalog).run("Hi")
 
     assert chat.prompts == [(SUPERVISOR_SYSTEM_PROMPT, "Hi")]
+
+
+OPTIMIZE = {"members": ["Pikachu"], "goal": "strong", "keep": ["pikachu"], "notes": "Lead."}
+
+
+def test_build_then_optimize_hands_facts_to_the_optimizer(catalog: PokemonCatalog) -> None:
+    chat = RoutingChat(
+        [("ask_team_builder", "Team around Pikachu"), ("ask_team_optimizer", OPTIMIZE)]
+    )
+
+    result = Supervisor(chat, catalog).run("q")
+
+    builder, optimizer = result.delegations
+    assert optimizer.agent == "team_optimizer"
+    assert optimizer.handoff == ("pikachu",)
+    assert optimizer.task == "optimize ['Pikachu'] (goal: strong; keep: ['pikachu'])"
+    assert optimizer.output is not None
+    assert optimizer.output["final_members"] == ["pikachu"]
+    assert optimizer.tokens == 75
+    optimizer_prompt = chat.prompts[-1][1]
+    assert "Keep: pikachu" in optimizer_prompt
+    assert "Author's notes:\nLead." in optimizer_prompt
+    assert "- pikachu (#25): electric" in optimizer_prompt
+
+
+def test_optimizer_with_unknown_member_fails_as_data(catalog: PokemonCatalog) -> None:
+    chat = RoutingChat([("ask_team_optimizer", {**OPTIMIZE, "members": ["pikablu"]})])
+
+    result = Supervisor(chat, catalog).run("q")
+
+    (delegation,) = result.delegations
+    assert delegation.error is not None and "cannot optimize" in delegation.error
+    assert len(chat.prompts) == 1
 
 
 def test_research_question_is_delegated(catalog: PokemonCatalog) -> None:

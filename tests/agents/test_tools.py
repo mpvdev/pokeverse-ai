@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 
 from pokeverse.agents import make_catalog_tools, make_team_tools, normalize_pokemon_identifier
+from pokeverse.agents.tools import make_score_tool
 from pokeverse.catalog import (
     Pokemon,
     PokemonCatalog,
@@ -129,3 +130,16 @@ def test_analyze_team_rejects_oversized_team(repository: SqlitePokemonRepository
     result = analyze(PokemonCatalog(repository), ["mr-mime"] * 7)
 
     assert result["error"] == "invalid_team"
+
+
+def test_score_team_is_compact(repository: SqlitePokemonRepository) -> None:
+    tool = make_score_tool(PokemonCatalog(repository))
+
+    result = tool.handler(names=["Mr. Mime", "mr-mime"])
+
+    assert result == {
+        "members": ["mr-mime (psychic/fairy)", "mr-mime (psychic/fairy)"],
+        "score": [3, 6, 15, 14],
+        "vulnerable_to": ["poison", "ghost", "steel"],
+    }
+    assert tool.handler(names=["missingno"])["error"] == "not_found"

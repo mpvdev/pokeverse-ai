@@ -108,17 +108,50 @@ ANALYZE_TEAM_PARAMETERS: dict[str, Any] = {
 }
 
 
+def _resolve_team(catalog: PokemonCatalog, names: list[str]) -> Team | dict[str, Any]:
+    if not 1 <= len(names) <= MAX_TEAM_SIZE:
+        return {"error": "invalid_team", "message": f"a team has 1-{MAX_TEAM_SIZE} members"}
+    members = []
+    for name in names:
+        found = lookup(catalog, name)
+        if not isinstance(found, Pokemon):
+            return {**found, "name": name}
+        members.append(found)
+    return Team(tuple(members))
+
+
+def make_score_tool(catalog: PokemonCatalog) -> Tool:
+    """A compact team check for exploring many candidates cheaply."""
+
+    def score(names: list[str]) -> dict[str, Any]:
+        team = _resolve_team(catalog, names)
+        if not isinstance(team, Team):
+            return team
+        analysis = analyze_team(team)
+        return {
+            "members": [f"{m.name} ({'/'.join(m.types)})" for m in team.members],
+            "score": list(analysis.score),
+            "vulnerable_to": [e.attacking_type.value for e in analysis.vulnerabilities],
+        }
+
+    return Tool(
+        name="score_team",
+        description=(
+            "Score a candidate team. `score` is [vulnerabilities, members exposed to them, "
+            "unresisted types, offensive gaps]; lower is better, compared left to right. "
+            "Also returns each member's types and the vulnerable attack types."
+        ),
+        parameters=ANALYZE_TEAM_PARAMETERS,
+        handler=score,
+    )
+
+
 def make_team_tools(catalog: PokemonCatalog) -> tuple[Tool, ...]:
     def analyze(names: list[str]) -> dict[str, Any]:
-        if not 1 <= len(names) <= MAX_TEAM_SIZE:
-            return {"error": "invalid_team", "message": f"a team has 1-{MAX_TEAM_SIZE} members"}
-        members = []
-        for name in names:
-            found = lookup(catalog, name)
-            if not isinstance(found, Pokemon):
-                return {**found, "name": name}
-            members.append(found)
-        analysis = analyze_team(Team(tuple(members))).to_dict()
+        team = _resolve_team(catalog, names)
+        if not isinstance(team, Team):
+            return team
+        analysis = analyze_team(team).to_dict()
         del analysis["exposures"]  # per-type detail costs tokens and the summary suffices
         return analysis
 

@@ -5,10 +5,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pokeverse.agents.context import SharedContext, with_context
+from pokeverse.agents.optimizer import TeamOptimizationAgent
 from pokeverse.agents.research import ChatModel, ResearchAgent
 from pokeverse.agents.team_builder import TeamCompositionAgent
-from pokeverse.catalog import PokemonCatalog
+from pokeverse.agents.tools import normalize_pokemon_identifier
+from pokeverse.catalog import PokemonCatalog, PokemonNotInCatalogError
 from pokeverse.llm import Completion, LlmRequestError, Tool
+from pokeverse.teams import MAX_TEAM_SIZE, Team
 
 SUPERVISOR_SYSTEM_PROMPT = (
     "You are the PokéVerse Supervisor. You coordinate specialist agents and never answer "
@@ -16,6 +19,11 @@ SUPERVISOR_SYSTEM_PROMPT = (
     "Use ask_research_agent for facts about specific Pokémon: types, Pokédex numbers, "
     "weaknesses, resistances and type matchups. "
     "Use ask_team_builder to build or propose a team. "
+    "Use ask_team_optimizer to review and improve a team: after ask_team_builder returns a "
+    "team, call it with the member names, the user's goal, the Pokémon the user explicitly "
+    "required under `keep`, and the builder's member roles and summary as `notes`; also use it "
+    "when the user asks to improve a team they already have. Present the optimizer's final "
+    "team, mention accepted swaps, and correct any claims it found to be wrong. "
     "Specialists cannot see the user's message: give each one a complete, self-contained task "
     "with every constraint the user stated, and do not add requirements the user did not ask "
     "for. If a request needs both, call both, and split it: give the Research Agent only the "
@@ -37,6 +45,31 @@ TASK_PARAMETERS = {
         }
     },
     "required": ["task"],
+    "additionalProperties": False,
+}
+
+OPTIMIZER_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "members": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": MAX_TEAM_SIZE,
+            "description": "The team's member names.",
+        },
+        "goal": {"type": "string", "description": "What the user wants from the team."},
+        "keep": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Members the user explicitly required; they will not be swapped out.",
+        },
+        "notes": {
+            "type": "string",
+            "description": "The team author's roles and summary, to fact-check.",
+        },
+    },
+    "required": ["members", "goal", "keep", "notes"],
     "additionalProperties": False,
 }
 
@@ -97,23 +130,36 @@ class SupervisorResult:
 
 
 class Supervisor:
-    """Delegates to the Research and Team Composition agents and composes their results."""
+    """Delegates to the Research, Team Composition and Team Optimization agents."""
 
     def __init__(self, chat: ChatModel, catalog: PokemonCatalog) -> None:
         self._chat = chat
+        self._catalog = catalog
         self._research = ResearchAgent(chat, catalog)
         self._team_builder = TeamCompositionAgent(chat, catalog)
+        self._optimizer = TeamOptimizationAgent(chat, catalog)
+
+    def _optimize(
+        self, members: list[str], goal: str, keep: list[str], notes: str, context: SharedContext
+    ) -> Any:
+        try:
+            team = Team(
+                tuple(self._catalog.get(normalize_pokemon_identifier(name)) for name in members)
+            )
+        except PokemonNotInCatalogError as error:
+            raise ValueError(f"cannot optimize: {error}") from error
+        return self._optimizer.optimize(
+            team, goal=goal, keep=keep, notes=notes, facts=context.render()
+        )
 
     def run(self, request: str) -> SupervisorResult:
         delegations: list[Delegation] = []
         context = SharedContext()
 
-        def delegate(
-            agent: str, task: str, work: Callable[[str, frozenset[str]], Any]
-        ) -> dict[str, Any]:
+        def delegate(agent: str, task: str, work: Callable[[SharedContext], Any]) -> dict[str, Any]:
             handoff = context.names
             try:
-                result = work(with_context(task, context), frozenset(handoff))
+                result = work(context)
             except LlmRequestError as error:
                 delegations.append(
                     Delegation(
@@ -143,7 +189,9 @@ class Supervisor:
                 handler=lambda task: delegate(
                     "research",
                     task,
-                    lambda prompt, verified: self._research.ask(prompt, verified=verified),
+                    lambda ctx: self._research.ask(
+                        with_context(task, ctx), verified=frozenset(ctx.names)
+                    ),
                 ),
             ),
             Tool(
@@ -155,7 +203,25 @@ class Supervisor:
                 ),
                 parameters=TASK_PARAMETERS,
                 handler=lambda task: delegate(
-                    "team_builder", task, lambda prompt, _: self._team_builder.build(prompt)
+                    "team_builder",
+                    task,
+                    lambda ctx: self._team_builder.build(with_context(task, ctx)),
+                ),
+            ),
+            Tool(
+                name="ask_team_optimizer",
+                description=(
+                    "Ask the Team Optimization Agent to review a team. It fact-checks type "
+                    "claims in `notes` against the type chart and proposes swaps; only swaps "
+                    "that measurably improve the deterministic analysis are kept. Returns "
+                    "`final_members`, `final_analysis`, `swaps` (accepted or rejected, with "
+                    "verdicts), `claims` (with `correct`) and `critique`, or an error object."
+                ),
+                parameters=OPTIMIZER_PARAMETERS,
+                handler=lambda members, goal, keep, notes: delegate(
+                    "team_optimizer",
+                    f"optimize {members} (goal: {goal or 'none'}; keep: {keep or 'none'})",
+                    lambda ctx: self._optimize(members, goal, keep, notes, ctx),
                 ),
             ),
         )

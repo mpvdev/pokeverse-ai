@@ -504,6 +504,48 @@ def test_build_rejects_invented_pokemon(fake_chat: type[FakeChat]) -> None:
     assert "does not exist" in result.stderr
 
 
+OPTIMIZER_REPLY = {
+    "claims": [{"member": "charizard", "attacking_type": "rock", "claimed": "resists"}],
+    "swaps": [{"out": "pikachu", "in": "charizard", "reason": "Ground immunity"}],
+    "critique": "Two Pikachu share a Ground weakness.",
+}
+
+
+def test_optimize_applies_improving_swap_and_flags_wrong_claim(
+    fake_chat: type[FakeChat],
+) -> None:
+    fake_chat.data = OPTIMIZER_REPLY
+
+    result = runner.invoke(app, ["optimize", "pikachu", "pikachu", "--notes", "x"])
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines[0].startswith("Before: pikachu, pikachu")
+    assert lines[1].startswith("  ACCEPTED pikachu -> charizard: Ground immunity [improved")
+    assert lines[2].startswith("After:  charizard, pikachu")
+    assert "Vulnerable to: none" in lines
+    assert "  WRONG charizard vs rock: claimed resists, actually weak (4x)" in lines
+    assert lines[-1] == "Two Pikachu share a Ground weakness."
+
+
+def test_optimize_respects_keep(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = OPTIMIZER_REPLY
+
+    result = runner.invoke(app, ["optimize", "pikachu", "pikachu", "--keep", "Pikachu", "--json"])
+
+    data = json.loads(result.stdout)
+    assert data["final_members"] == ["pikachu", "pikachu"]
+    assert data["swaps"][0]["accepted"] is False
+    assert "keep this member" in data["swaps"][0]["verdict"]
+
+
+def test_optimize_unknown_member_exits_not_found(fake_chat: type[FakeChat]) -> None:
+    result = runner.invoke(app, ["optimize", "pikachu", "missingno"])
+
+    assert result.exit_code == EXIT_NOT_FOUND
+    assert fake_chat.calls == []
+
+
 def canned_supervisor_result() -> Any:
     from pokeverse.agents import Delegation, SupervisorResult
     from pokeverse.llm import Completion

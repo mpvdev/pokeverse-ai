@@ -18,6 +18,7 @@ from pokeverse.agents import (
     ResearchAgent,
     Supervisor,
     TeamCompositionAgent,
+    TeamOptimizationAgent,
     make_catalog_tools,
     normalize_pokemon_identifier,
 )
@@ -230,6 +231,64 @@ def build_command(
         print_analysis(result.analysis)
     if not result.self_checked:
         typer.echo("Warning: the agent did not analyze this exact team before answering", err=True)
+    if show_usage:
+        print_usage(result.completion)
+
+
+@app.command("optimize")
+def optimize_command(
+    ctx: typer.Context,
+    names: Annotated[list[str], typer.Argument(help="The team: 1-6 Pokémon names or ids.")],
+    goal: Annotated[str, typer.Option("--goal", help="What the team should achieve.")] = "",
+    keep: Annotated[
+        list[str] | None, typer.Option("--keep", help="Never swap out this member (repeatable).")
+    ] = None,
+    notes: Annotated[
+        str, typer.Option("--notes", help="Claims about the team to fact-check.")
+    ] = "",
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    show_usage: Annotated[
+        bool, typer.Option("--usage", help="Print tool calls and token usage to stderr.")
+    ] = False,
+) -> None:
+    """Ask the Team Optimization Agent to fact-check and improve a team."""
+    settings: Settings = ctx.obj
+    if len(names) > MAX_TEAM_SIZE:
+        raise fail(f"a team can have at most {MAX_TEAM_SIZE} Pokémon", EXIT_INVALID_INPUT)
+    try:
+        with llm_errors():
+            chat = OpenAIChat(LlmSettings.from_env())
+            with open_catalog(settings, offline=False) as catalog:
+                team = Team(tuple(catalog.get(normalize_pokemon_identifier(n)) for n in names))
+                result = TeamOptimizationAgent(chat, catalog).optimize(
+                    team, goal=goal, keep=keep or (), notes=notes
+                )
+    except PokemonNotInCatalogError as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+
+    if as_json:
+        typer.echo(json.dumps(result.to_dict()))
+    else:
+        typer.echo(
+            f"Before: {', '.join(result.original.team.names)}  score {result.original.score}"
+        )
+        for swap in result.swaps:
+            status = "ACCEPTED" if swap.accepted else "REJECTED"
+            typer.echo(f"  {status} {swap.out} -> {swap.into}: {swap.reason} [{swap.verdict}]")
+        typer.echo(f"After:  {', '.join(result.final.team.names)}  score {result.final.score}")
+        print_analysis(result.final)
+        if result.claims:
+            typer.echo("Claims:")
+        for claim in result.claims:
+            status = "ok   " if claim.correct else "WRONG"
+            actual = (
+                f"{claim.actual} ({claim.multiplier:g}x)" if claim.actual else "unknown Pokémon"
+            )
+            typer.echo(
+                f"  {status} {claim.member} vs {claim.attacking_type}: "
+                f"claimed {claim.claimed}, actually {actual}"
+            )
+        typer.echo(f"\n{result.critique}")
     if show_usage:
         print_usage(result.completion)
 

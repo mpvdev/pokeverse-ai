@@ -69,6 +69,13 @@ def test_equal_weak_and_cover_is_not_a_vulnerability() -> None:
     assert T.ICE not in [e.attacking_type for e in analysis.vulnerabilities]
 
 
+def test_score_orders_by_vulnerabilities_then_exposure_then_coverage() -> None:
+    assert analyze_team(STARTERS).score == (1, 2, 8, 8)
+    flygon = Pokemon(330, "flygon", (T.GROUND, T.DRAGON))
+    worse = analyze_team(Team((GARCHOMP, flygon, BLASTOISE)))
+    assert worse.score > analyze_team(STARTERS).score
+
+
 def test_to_dict_is_json_ready() -> None:
     data = analyze_team(STARTERS).to_dict()
 

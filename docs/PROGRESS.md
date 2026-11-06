@@ -76,9 +76,11 @@ Deliverable: a multi-agent Pokémon team advisor.
 
 - [x] Step 5: shared context and handoffs — `SharedContext` (`pokeverse.agents.context`) collects verified facts from specialists' tool outputs only (Pokémon records, matchup profiles, analyzed team members; errors ignored) and appends them as a "Verified facts" block to the next specialist's task; specialist prompts say to rely on them. Handed-over Pokémon count as grounded for the Research Agent. Each `Delegation` records its `handoff`; results include the context. Supervisor prompt: split combined requests (facts to Research, team to Team Composition) and add no unrequested constraints. `LlmRequestError` now carries the partial `Completion` (usage + tool calls before failure), so failed delegations report real tokens. Team builder prompt: `analyze_team` resolves members itself, so try candidates directly. Benchmark ("Garchomp weaknesses, then a team of 4"): Step 4 16.6k tokens / 46 s → 8.3k / 26.5 s; team builder 13.1k → 5.1k; research task now only the factual question; handoff `garchomp`. Diagnosed along the way: the first run failed after 8 tool rounds because the builder spent two sequential rounds per swap (`get_pokemon` then `analyze_team`) while genuinely revising. Remaining gap: role descriptions are unchecked model prose (it claimed Flying/Steel Corviknight resists Ice; it is neutral) — input for Step 6.
 
+- [x] Step 6: Team Optimization Agent — the model proposes, code decides. `TeamOptimizationAgent.optimize(team, goal, keep, notes)`: the model only *extracts* type claims from the notes (code checks each against the chart, falling back to the catalog for non-members) and proposes up to 3 swaps; code applies them in order and keeps a swap only if `TeamAnalysis.score` (vulnerabilities, members exposed, unresisted, offensive gaps; lower is better) strictly improves, and never removes a `keep` member. New compact `score_team` tool for exploring candidates (the full `analyze_team` made exploration cost 23k tokens for 16 candidates; now 5.2k). Supervisor gets `ask_team_optimizer` (members, goal, keep, notes) and is told to optimize after building and to correct wrong claims; verified facts are passed as a separate block so they are not extracted as claims. `pokeverse optimize <names…> [--goal] [--keep] [--notes] [--json] [--usage]`. Live: Fire-only team score (3,11,11,10) → (2,6,9,8) with 2 accepted swaps, still Fire-only, Dragon vulnerability removed; the Corviknight-resists-Ice claim flagged WRONG (1×); end to end via `advise` the final answer corrects it. Cost: the full research → build → optimize flow took 23.7k tokens / 72 s (optimizer 15.5k) vs 8.3k / 26.5 s without optimizing — the quality/cost trade-off for Step 7 to measure. Known limit: the optimizer's own critique can repeat a claim that code later marks wrong (checks happen after the reply); `goal` constraints like "Fire-only" are enforced only by the model.
+
 ## Next Up
 
-- Phase 2, Step 6: Team Optimization Agent (critiques a proposal against the deterministic analysis and the type chart, suggests swaps).
+- Phase 2, Step 7: evaluation — multi- vs single-agent on fixed tasks (validity, grounding, claim accuracy, tokens, latency); decide when the optimizer is worth running.
 
 ## Running Locally
 
@@ -99,4 +101,5 @@ uv run pokeverse eval                                            # evaluation su
 uv run pokeverse team charizard blastoise venusaur              # deterministic team analysis
 uv run pokeverse build "A balanced team of 6 around Pikachu"    # Team Composition Agent
 uv run pokeverse advise "Is Gengar weak to Psychic?" --usage    # Supervisor (delegates)
+uv run pokeverse optimize reshiram turtonator gouging-fire volcanion --goal "Fire-only"   # Team Optimization Agent
 ```

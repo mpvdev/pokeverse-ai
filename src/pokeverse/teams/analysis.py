@@ -55,6 +55,17 @@ class TeamAnalysis:
     def unresisted(self) -> tuple[PokemonType, ...]:
         return tuple(e.attacking_type for e in self.exposures if e.is_unresisted)
 
+    @property
+    def score(self) -> tuple[int, int, int, int]:
+        """Lower is better; compared in order: vulnerabilities, members exposed by them,
+        unresisted types, offensive gaps."""
+        return (
+            len(self.vulnerabilities),
+            sum(len(exposure.weak) for exposure in self.vulnerabilities),
+            len(self.unresisted),
+            len(self.offensive_gaps),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "team": self.team.to_dict(),

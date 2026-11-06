@@ -12,10 +12,11 @@ pokeverse-ai/
 │   ├── agents/
 │   │   ├── answers.py     # PokedexAnswer + its strict JSON Schema
 │   │   ├── context.py     # SharedContext: verified facts handed between agents
+│   │   ├── optimizer.py   # TeamOptimizationAgent: claim checks + score-gated swaps
 │   │   ├── research.py    # ResearchAgent + ResearchResult (grounding check)
 │   │   ├── supervisor.py  # Supervisor: specialists as tools, Delegation trace
 │   │   ├── team_builder.py  # TeamCompositionAgent, TeamProposal, TeamBuildResult
-│   │   └── tools.py       # get_pokemon, get_type_matchups, analyze_team tools
+│   │   └── tools.py       # get_pokemon, get_type_matchups, analyze_team, score_team tools
 │   ├── evals/
 │   │   └── research.py    # Research Agent eval cases + deterministic checks
 │   ├── teams/
@@ -56,7 +57,7 @@ pokeverse-ai/
 
 | Component | Module | Responsibility |
 |-----------|--------|----------------|
-| CLI | `pokeverse.cli` | Typer app. `pokemon <name|id> [--json] [--offline]` and `list [--json]` over the local catalog; `ask <question> [--no-tools] [--json]` asks the LLM, which can look Pokémon up via the catalog tool (`--usage` traces tool calls; `--json` prints a validated `PokedexAnswer`). `research <question> [--json] [--usage]` runs the Research Agent and warns on ungrounded claims; `eval [--case ID]` runs the evaluation suite; `team <names…> [--json] [--offline]` analyzes a team; `build "<request>" [--json] [--usage]` runs the Team Composition Agent and prints our own analysis of its team; `advise "<request>" [--json] [--usage]` runs the Supervisor and can show delegations and the supervisor/specialist token split. DB path from `--db`, `POKEVERSE_DB`, or `$XDG_DATA_HOME/pokeverse/catalog.db`. Exit codes: 0 ok, 1 not found, 2 invalid input, 3 upstream unavailable, 4 auth/credentials, 5 eval failures; errors on stderr. |
+| CLI | `pokeverse.cli` | Typer app. `pokemon <name|id> [--json] [--offline]` and `list [--json]` over the local catalog; `ask <question> [--no-tools] [--json]` asks the LLM, which can look Pokémon up via the catalog tool (`--usage` traces tool calls; `--json` prints a validated `PokedexAnswer`). `research <question> [--json] [--usage]` runs the Research Agent and warns on ungrounded claims; `eval [--case ID]` runs the evaluation suite; `team <names…> [--json] [--offline]` analyzes a team; `build "<request>" [--json] [--usage]` runs the Team Composition Agent and prints our own analysis of its team; `advise "<request>" [--json] [--usage]` runs the Supervisor and can show delegations and the supervisor/specialist token split; `optimize <names…> [--goal] [--keep] [--notes] [--json] [--usage]` runs the Team Optimization Agent. DB path from `--db`, `POKEVERSE_DB`, or `$XDG_DATA_HOME/pokeverse/catalog.db`. Exit codes: 0 ok, 1 not found, 2 invalid input, 3 upstream unavailable, 4 auth/credentials, 5 eval failures; errors on stderr. |
 | Catalog models | `pokeverse.catalog.models` | Immutable, self-validating reference data: `Pokemon` (slug name, 1–2 types) and the `PokemonType` enum. |
 | PokéAPI client | `pokeverse.catalog.pokeapi` | Fetches a Pokémon by name/id, maps the payload to `Pokemon`, and translates HTTP/network failures into typed `PokeApiError` subclasses. Import-only; not a runtime dependency. |
 | Repository | `pokeverse.catalog.repository` | `SqlitePokemonRepository`: tables `pokemon` and `pokemon_type` (slot-ordered), schema version in `PRAGMA user_version`, atomic upserts. |
@@ -67,12 +68,13 @@ pokeverse-ai/
 | Evaluation | `pokeverse.evals` | `RESEARCH_CASES` (fixed questions with expected Pokémon, required facts, whether a lookup is expected, tools that must be called, words that must not appear) and `check()`; `run_case()` records model misbehaviour as a case failure while auth/outage errors abort the run. Live runs only (no recorded model responses). |
 | Catalog tools | `pokeverse.agents.tools` | `make_catalog_tools(catalog)` returns two read-only tools: `get_pokemon` (returns `Pokemon.to_dict()`) and `get_type_matchups` (the Pokémon plus `weak_to` / `resists` / `immune_to` multipliers from the type chart). Both normalize model input (`"Mr. Mime"` → `mr-mime`, `"#025"` → 25) and report catalog failures as `{"error", "message"}` data so the model can explain them. |
 | Type chart | `pokeverse.catalog.type_chart` | Deterministic Gen 6+ type effectiveness: `TYPE_CHART` (non-1× entries only), `effectiveness(attacking, defending_types)`, `defensive_profile(types)`. Hard-coded reference data, checked against PokéAPI by an opt-in network test. |
-| Teams | `pokeverse.teams` | Application state, separate from reference data. `Team`: immutable 1–6 Pokémon; the same species may repeat, and each copy counts as a separate member in the analysis. `analyze_team(team)` → `TeamAnalysis`: per-attacking-type exposure (weak / resists / immune members), `vulnerabilities` (≥2 weak and weak outnumber cover), `unresisted` types, and STAB-only `offensive_gaps`. Pure code over the type chart; agents will read it rather than judge teams themselves. |
+| Teams | `pokeverse.teams` | Application state, separate from reference data. `Team`: immutable 1–6 Pokémon; the same species may repeat, and each copy counts as a separate member in the analysis. `analyze_team(team)` → `TeamAnalysis`: per-attacking-type exposure (weak / resists / immune members), `vulnerabilities` (≥2 weak and weak outnumber cover), `unresisted` types, STAB-only `offensive_gaps`, and a comparable `score` tuple (lower is better). Pure code over the type chart; agents will read it rather than judge teams themselves. |
 | Team Composition Agent | `pokeverse.agents.team_builder` | `TeamCompositionAgent.build(request)`: free-text request → `TeamProposal` (members with roles, summary) using `get_pokemon`, `get_type_matchups` and `analyze_team` (from `make_team_tools`), with a larger tool-round and token budget than research. The result (`TeamBuildResult`) is re-checked by code: members resolved through the catalog (invented Pokémon rejected), analysis recomputed, and `self_checked` reports whether the agent analyzed exactly the final team. |
 | Supervisor | `pokeverse.agents.supervisor` | `Supervisor.run(request)`: an LLM whose tools are the specialist agents (`ask_research_agent`, `ask_team_builder`, each taking a self-contained `task`). It never answers Pokémon facts itself and composes its answer from specialist results. Each tool call runs the real specialist (with its own prompt, tools and validation) and returns its `to_dict()`; specialist failures come back as error data. `SupervisorResult` holds the answer, the observed `Delegation` trace and the supervisor/specialist token split. |
 | Shared context | `pokeverse.agents.context` | `SharedContext`, one per supervised request: records verified facts from specialists' tool outputs only (never model prose) and renders them as a "Verified facts" block appended to the next specialist's task. Each `Delegation` records its `handoff`; Pokémon handed over count as grounded for the Research Agent. |
+| Team Optimization Agent | `pokeverse.agents.optimizer` | `TeamOptimizationAgent.optimize(team, goal, keep, notes, facts)`. The model extracts type claims from the notes and proposes up to 3 swaps, exploring candidates with the compact `score_team` tool. Code decides: each claim is checked against the type chart (`ClaimCheck`), and swaps are applied in order and kept only if `TeamAnalysis.score` strictly improves and no `keep` member is removed (`SwapDecision` with a verdict). Returns `OptimizationResult` (original and final analysis, swaps, claims, critique). Exposed to the Supervisor as `ask_team_optimizer`. |
 
-### Multi-agent flow (Phase 2, Steps 4–5)
+### Multi-agent flow (Phase 2, Steps 4–6)
 
 ```text
 user request ──> Supervisor (LLM) ── ask_research_agent(task) ──> ResearchAgent ──> catalog tools
@@ -82,6 +84,7 @@ user request ──> Supervisor (LLM) ── ask_research_agent(task) ──> Re
                       │                      │ "Verified facts" block
                       │                      v
                       │          └─ ask_team_builder(task) ────> TeamCompositionAgent ──> catalog + analyze_team
+                      │          └─ ask_team_optimizer(members, goal, keep, notes) ──> TeamOptimizationAgent ──> score_team; code checks claims, gates swaps
                       └──> answer composed from specialist results (+ Delegation trace, handoffs, token split)
 ```
 
