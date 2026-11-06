@@ -10,11 +10,9 @@ NAME_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 MAX_TYPES = 2
 
-# Base stats are stored in one byte in the games.
 MIN_BASE_STAT = 1
 MAX_BASE_STAT = 255
 
-# Ranges of real move data (Explosion has 250 power; Trick Room has -7 priority).
 MAX_MOVE_POWER = 250
 MIN_PRIORITY = -7
 MAX_PRIORITY = 5
@@ -87,6 +85,7 @@ class Pokemon:
     name: str
     types: tuple[PokemonType, ...]
     stats: BaseStats
+    learnset: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if isinstance(self.pokedex_id, bool) or not isinstance(self.pokedex_id, int):
@@ -109,6 +108,11 @@ class Pokemon:
         if not isinstance(self.stats, BaseStats):
             raise ValueError("stats must be BaseStats")
 
+        if not isinstance(self.learnset, frozenset) or not all(
+            isinstance(move, str) and NAME_PATTERN.fullmatch(move) for move in self.learnset
+        ):
+            raise ValueError("learnset must be a frozenset of move slugs")
+
     @property
     def display_name(self) -> str:
         """Human-friendly name derived from the slug (e.g. ``mr-mime`` -> ``Mr Mime``)."""
@@ -118,6 +122,7 @@ class Pokemon:
         """JSON-serializable representation, stable for CLI output and LLM tools.
 
         ``stats=False`` omits base stats where only identity and types matter (saves tokens).
+        The learnset (often 100+ names) is never included.
         """
         data: dict[str, Any] = {
             "pokedex_id": self.pokedex_id,

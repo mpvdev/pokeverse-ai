@@ -204,6 +204,67 @@ def test_move_outage_exits_unavailable(db: str, upstream: Upstream) -> None:
     assert result.exit_code == EXIT_UPSTREAM_UNAVAILABLE
 
 
+def test_learnset_lists_move_names_without_move_lookups(db: str, upstream: Upstream) -> None:
+    text = invoke(db, "learnset", "Pikachu")
+    as_json = invoke(db, "learnset", "pikachu", "--json")
+
+    assert text.stdout.splitlines() == [
+        "#0025 Pikachu — Electric — 6 learnable moves",
+        "iron-tail, quick-attack, surf, thunder-wave, thunderbolt, volt-tackle",
+    ]
+    assert json.loads(as_json.stdout)["learnset"][0] == "iron-tail"
+    assert upstream.requests == ["/api/v2/pokemon/pikachu"]
+
+
+def test_moveset_prints_the_battler(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "pikachu", "Thunderbolt")
+
+    assert result.exit_code == 0
+    assert result.stdout.splitlines() == [
+        "#0025 Pikachu — Electric",
+        "  #0085 Thunderbolt — Electric, special, power 90, accuracy 100%, priority 0, PP 15",
+    ]
+
+
+def test_moveset_json(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "pikachu", "thunderbolt", "--json")
+
+    data = json.loads(result.stdout)
+    assert data["pokemon"]["name"] == "pikachu"
+    assert [move["name"] for move in data["moves"]] == ["thunderbolt"]
+
+
+def test_moveset_rejects_unlearnable_moves_before_fetching_them(
+    db: str, upstream: Upstream
+) -> None:
+    result = invoke(db, "moveset", "pikachu", "thunderbolt", "Swords Dance")
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "pikachu cannot learn: swords-dance" in result.stderr
+    assert upstream.requests == ["/api/v2/pokemon/pikachu"]
+
+
+def test_moveset_rejects_status_moves(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "charizard", "swords-dance")
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "fixed power" in result.stderr
+
+
+def test_moveset_checks_the_move_count_before_any_lookup(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "pikachu", *["thunderbolt"] * 5)
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert upstream.requests == []
+
+
+def test_moveset_unknown_move_exits_not_found(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "pikachu", "surf")
+
+    assert result.exit_code == EXIT_NOT_FOUND
+    assert "does not exist" in result.stderr
+
+
 def test_team_prints_analysis(db: str, upstream: Upstream) -> None:
     result = invoke(db, "team", "Pikachu", "charizard")
 

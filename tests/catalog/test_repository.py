@@ -16,7 +16,13 @@ from pokeverse.catalog.repository import SCHEMA_VERSION, CatalogSchemaError
 
 PIKACHU_STATS = BaseStats(35, 55, 40, 50, 50, 90)
 CHARIZARD_STATS = BaseStats(78, 84, 78, 109, 85, 100)
-PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), PIKACHU_STATS)
+PIKACHU = Pokemon(
+    25,
+    "pikachu",
+    (PokemonType.ELECTRIC,),
+    PIKACHU_STATS,
+    frozenset({"thunderbolt", "quick-attack", "surf"}),
+)
 CHARIZARD = Pokemon(6, "charizard", (PokemonType.FIRE, PokemonType.FLYING), CHARIZARD_STATS)
 THUNDERBOLT = Move(85, "thunderbolt", PokemonType.ELECTRIC, DamageClass.SPECIAL, 90, 100, 0, 15)
 SWORDS_DANCE = Move(14, "swords-dance", PokemonType.NORMAL, DamageClass.STATUS, None, None, 0, 20)
@@ -47,6 +53,16 @@ CREATE TABLE pokemon_stats (
 );
 INSERT INTO pokemon_stats VALUES (25, 35, 55, 40, 50, 50, 90);
 PRAGMA user_version = 2;
+"""
+
+V3_ADDITIONS = """
+CREATE TABLE move (
+    move_id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, type TEXT NOT NULL,
+    damage_class TEXT NOT NULL, power INTEGER, accuracy INTEGER,
+    priority INTEGER NOT NULL, pp INTEGER NOT NULL, updated_at TEXT NOT NULL
+);
+INSERT INTO move VALUES (85, 'thunderbolt', 'electric', 'special', 90, 100, 0, 15, '2026-01-01');
+PRAGMA user_version = 3;
 """
 
 
@@ -165,19 +181,31 @@ def test_v1_rows_without_stats_are_misses_until_re_saved(tmp_path: Path) -> None
         assert repo.count() == 1
 
 
-def test_v2_database_is_upgraded_and_keeps_its_data(tmp_path: Path) -> None:
+def test_v3_database_keeps_moves_and_pokemon_without_learnset_are_misses(
+    tmp_path: Path,
+) -> None:
     db_path = tmp_path / "catalog.db"
     connection = sqlite3.connect(db_path)
-    connection.executescript(V1_SCHEMA + V2_ADDITIONS)
+    connection.executescript(V1_SCHEMA + V2_ADDITIONS + V3_ADDITIONS)
     connection.close()
 
     with SqlitePokemonRepository(db_path) as repo:
-        assert repo.get_by_name("pikachu") == PIKACHU
-        repo.save_move(THUNDERBOLT)
         assert repo.get_move_by_name("thunderbolt") == THUNDERBOLT
+        assert repo.get_by_name("pikachu") is None
+
+        repo.save(PIKACHU)
+
+        assert repo.get_by_name("pikachu") == PIKACHU
 
     with sqlite3.connect(db_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone() == (SCHEMA_VERSION,)
+
+
+def test_empty_learnset_round_trips(repository: SqlitePokemonRepository) -> None:
+    repository.save(CHARIZARD)
+
+    assert repository.get_by_id(6) == CHARIZARD
+    assert repository.get_by_id(6).learnset == frozenset()
 
 
 def test_move_round_trip(repository: SqlitePokemonRepository) -> None:

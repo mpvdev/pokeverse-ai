@@ -21,9 +21,21 @@ from pokeverse.catalog.pokeapi import (
 
 FIXTURES = Path(__file__).parent / "fixtures" / "pokeapi"
 
-PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), BaseStats(35, 55, 40, 50, 50, 90))
+PIKACHU = Pokemon(
+    25,
+    "pikachu",
+    (PokemonType.ELECTRIC,),
+    BaseStats(35, 55, 40, 50, 50, 90),
+    frozenset({"thunderbolt", "quick-attack", "iron-tail", "thunder-wave", "surf", "volt-tackle"}),
+)
 CHARIZARD = Pokemon(
-    6, "charizard", (PokemonType.FIRE, PokemonType.FLYING), BaseStats(78, 84, 78, 109, 85, 100)
+    6,
+    "charizard",
+    (PokemonType.FIRE, PokemonType.FLYING),
+    BaseStats(78, 84, 78, 109, 85, 100),
+    frozenset(
+        {"flamethrower", "air-slash", "dragon-claw", "earthquake", "swords-dance", "fire-fang"}
+    ),
 )
 THUNDERBOLT = Move(85, "thunderbolt", PokemonType.ELECTRIC, DamageClass.SPECIAL, 90, 100, 0, 15)
 SWORDS_DANCE = Move(14, "swords-dance", PokemonType.NORMAL, DamageClass.STATUS, None, None, 0, 20)
@@ -71,6 +83,20 @@ def test_parse_ignores_stat_order() -> None:
     assert parse_pokemon(payload).stats == CHARIZARD.stats
 
 
+def test_parse_skips_move_names_that_are_not_slugs() -> None:
+    payload = load_fixture("pikachu")
+    payload["moves"].append({"move": {"name": "breakneck-blitz--physical", "url": ""}})
+
+    assert parse_pokemon(payload).learnset == PIKACHU.learnset
+
+
+def test_parse_accepts_an_empty_learnset() -> None:
+    payload = load_fixture("pikachu")
+    payload["moves"] = []
+
+    assert parse_pokemon(payload).learnset == frozenset()
+
+
 def test_parse_orders_types_by_slot() -> None:
     payload = load_fixture("charizard")
     payload["types"].reverse()
@@ -103,6 +129,9 @@ def test_parse_skips_non_elemental_types() -> None:
         lambda p: p["stats"][0].update(base_stat=0),
         lambda p: p["stats"][0].update(base_stat="35"),
         lambda p: p["stats"][0].pop("stat"),
+        lambda p: p.pop("moves"),
+        lambda p: p["moves"][0].pop("move"),
+        lambda p: p["moves"][0]["move"].update(name=None),
     ],
 )
 def test_parse_rejects_malformed_payload(mutate: Callable[[dict[str, Any]], Any]) -> None:
@@ -253,7 +282,16 @@ def test_all_client_errors_share_a_base_class() -> None:
 @pytest.mark.network
 def test_live_fetch_matches_fixture() -> None:
     with PokeApiClient() as client:
-        assert client.fetch_pokemon("charizard") == parse_pokemon(load_fixture("charizard"))
+        live = client.fetch_pokemon("charizard")
+    fixture = parse_pokemon(load_fixture("charizard"))
+
+    assert (live.pokedex_id, live.name, live.types, live.stats) == (
+        fixture.pokedex_id,
+        fixture.name,
+        fixture.types,
+        fixture.stats,
+    )
+    assert fixture.learnset <= live.learnset
 
 
 @pytest.mark.network

@@ -23,6 +23,7 @@ from pokeverse.agents import (
     normalize_identifier,
 )
 from pokeverse.agents.supervisor import OptimizeMode
+from pokeverse.battles import MAX_MOVES, load_battler
 from pokeverse.catalog import (
     Move,
     MoveNotInCatalogError,
@@ -207,6 +208,71 @@ def move_command(
         raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
 
     typer.echo(json.dumps(move.to_dict()) if as_json else format_move(move))
+
+
+@app.command("learnset")
+def learnset_command(
+    ctx: typer.Context,
+    name_or_id: Annotated[str, typer.Argument(help="Pokémon name (e.g. pikachu) or Pokédex id.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """List the moves a Pokémon can learn (names only; no move lookups)."""
+    settings: Settings = ctx.obj
+    try:
+        identifier = normalize_identifier(name_or_id)
+        with open_catalog(settings, offline=offline) as catalog:
+            pokemon = catalog.get(identifier)
+    except ValueError as error:
+        raise fail(str(error), EXIT_INVALID_INPUT) from error
+    except PokemonNotInCatalogError as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+    except UpstreamUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+
+    names = sorted(pokemon.learnset)
+    if as_json:
+        typer.echo(json.dumps({"pokemon": pokemon.name, "learnset": names}))
+    else:
+        plural = "" if len(names) == 1 else "s"
+        typer.echo(f"{format_pokemon(pokemon)} — {len(names)} learnable move{plural}")
+        typer.echo(", ".join(names))
+
+
+@app.command("moveset")
+def moveset_command(
+    ctx: typer.Context,
+    pokemon: Annotated[str, typer.Argument(help="Pokémon name or Pokédex id.")],
+    moves: Annotated[list[str], typer.Argument(help=f"1-{MAX_MOVES} move names.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Check a battle moveset: every move must be learnable and deal power-based damage."""
+    settings: Settings = ctx.obj
+    try:
+        identifier = normalize_identifier(pokemon)
+        move_names = [normalize_identifier(move) for move in moves]
+        if any(isinstance(name, int) for name in move_names):
+            raise ValueError("moves must be given by name")
+        with open_catalog(settings, offline=offline) as catalog:
+            battler = load_battler(catalog, identifier, cast(list[str], move_names))
+    except ValueError as error:
+        raise fail(str(error), EXIT_INVALID_INPUT) from error
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+    except UpstreamUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+
+    if as_json:
+        typer.echo(json.dumps(battler.to_dict()))
+    else:
+        typer.echo(format_pokemon(battler.pokemon))
+        for move in battler.moves:
+            typer.echo(f"  {format_move(move)}")
 
 
 @app.command("team")

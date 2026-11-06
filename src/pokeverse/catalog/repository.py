@@ -1,5 +1,6 @@
 """SQLite persistence for Pokémon reference data."""
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 from os import PathLike
@@ -9,9 +10,8 @@ from typing import Any, Self
 
 from pokeverse.catalog.models import BaseStats, DamageClass, Move, Pokemon, PokemonType
 
-SCHEMA_VERSION = 3
-# Every schema statement is CREATE ... IF NOT EXISTS, so older versions upgrade by rerunning it.
-UPGRADABLE_VERSIONS = (0, 1, 2)
+SCHEMA_VERSION = 4
+UPGRADABLE_VERSIONS = (0, 1, 2, 3)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS pokemon (
@@ -40,6 +40,11 @@ CREATE TABLE IF NOT EXISTS pokemon_stats (
     speed            INTEGER NOT NULL CHECK (speed BETWEEN 1 AND 255)
 );
 
+CREATE TABLE IF NOT EXISTS pokemon_learnset (
+    pokedex_id  INTEGER PRIMARY KEY REFERENCES pokemon (pokedex_id) ON DELETE CASCADE,
+    moves       TEXT    NOT NULL CHECK (json_valid(moves))
+);
+
 CREATE TABLE IF NOT EXISTS move (
     move_id       INTEGER PRIMARY KEY CHECK (move_id > 0),
     name          TEXT    NOT NULL UNIQUE,
@@ -53,12 +58,12 @@ CREATE TABLE IF NOT EXISTS move (
 );
 """
 
-# Pokémon imported under schema v1 have no stats row; the inner join hides them, so the
-# catalog treats them as misses and re-imports them with stats on the next lookup.
 _SELECT = """
-SELECT p.pokedex_id, p.name, s.hp, s.attack, s.defense,
+SELECT p.pokedex_id, p.name, l.moves, s.hp, s.attack, s.defense,
        s.special_attack, s.special_defense, s.speed
-FROM pokemon p JOIN pokemon_stats s USING (pokedex_id)
+FROM pokemon p
+JOIN pokemon_stats s USING (pokedex_id)
+JOIN pokemon_learnset l USING (pokedex_id)
 """
 
 _SELECT_MOVE = """
@@ -134,6 +139,10 @@ class SqlitePokemonRepository:
                     stats.speed,
                 ),
             )
+            self._connection.execute(
+                "INSERT OR REPLACE INTO pokemon_learnset (pokedex_id, moves) VALUES (?, ?)",
+                (pokemon.pokedex_id, json.dumps(sorted(pokemon.learnset))),
+            )
 
     def get_by_id(self, pokedex_id: int) -> Pokemon | None:
         row = self._connection.execute(
@@ -150,11 +159,13 @@ class SqlitePokemonRepository:
         return [self._to_pokemon(row) for row in rows]
 
     def count(self) -> int:
-        (total,) = self._connection.execute("SELECT COUNT(*) FROM pokemon_stats").fetchone()
+        (total,) = self._connection.execute(
+            "SELECT COUNT(*) FROM pokemon_stats JOIN pokemon_learnset USING (pokedex_id)"
+        ).fetchone()
         return total
 
-    def _to_pokemon(self, row: tuple[int, ...]) -> Pokemon:
-        pokedex_id, name, *stats = row
+    def _to_pokemon(self, row: tuple[Any, ...]) -> Pokemon:
+        pokedex_id, name, learnset, *stats = row
         type_rows = self._connection.execute(
             "SELECT type FROM pokemon_type WHERE pokedex_id = ? ORDER BY slot", (pokedex_id,)
         ).fetchall()
@@ -163,6 +174,7 @@ class SqlitePokemonRepository:
             name=name,
             types=tuple(PokemonType(type_name) for (type_name,) in type_rows),
             stats=BaseStats(*stats),
+            learnset=frozenset(json.loads(learnset)),
         )
 
     def save_move(self, move: Move) -> None:

@@ -3,6 +3,14 @@
   "name": "pikachu",
   "height": 4,
   "weight": 60,
+  "moves": [
+    {"move": {"name": "thunderbolt", "url": "https://pokeapi.co/api/v2/move/85/"}},
+    {"move": {"name": "quick-attack", "url": "https://pokeapi.co/api/v2/move/98/"}},
+    {"move": {"name": "iron-tail", "url": "https://pokeapi.co/api/v2/move/231/"}},
+    {"move": {"name": "thunder-wave", "url": "https://pokeapi.co/api/v2/move/86/"}},
+    {"move": {"name": "surf", "url": "https://pokeapi.co/api/v2/move/57/"}},
+    {"move": {"name": "volt-tackle", "url": "https://pokeapi.co/api/v2/move/344/"}}
+  ],
   "stats": [
     {"base_stat": 35, "effort": 0, "stat": {"name": "hp", "url": "https://pokeapi.co/api/v2/stat/1/"}},
     {"base_stat": 55, "effort": 0, "stat": {"name": "attack", "url": "https://pokeapi.co/api/v2/stat/2/"}},

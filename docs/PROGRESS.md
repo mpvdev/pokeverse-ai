@@ -92,10 +92,10 @@ Deliverable: an AI-assisted battle strategy system. Battle mechanics are determi
 
 1. **Base stats in the catalog** — the numbers battles need (HP, attack, defense, special attack, special defense, speed).
 2. **Moves as reference data** — `Move` (type, physical/special/status, power, accuracy, priority, PP) imported from PokéAPI into the catalog.
-3. **Learnsets and battle movesets** — the moves each Pokémon can learn, stored with the catalog, and a moveset of up to 4 moves per battler validated against it (a deterministic default: damaging moves favouring STAB and type coverage).
+3. **Learnsets and battle movesets** — the moves each Pokémon can learn, stored with the catalog, and a battler of up to 4 moves validated against it.
 4. **Battle stats and damage** — level-50 stat formula and the damage formula (STAB, type effectiveness, critical hits, random roll) as pure functions with an injectable RNG.
 5. **Battle engine** — immutable battle state, legal actions (move or switch), turn order (priority, then speed), fainting and forced switches; seeded, reproducible battle logs.
-6. **Baseline players and `pokeverse battle`** — random and greedy (highest expected damage) players; simulate team vs team from the CLI.
+6. **Baseline players and `pokeverse battle`** — a deterministic default moveset (ranked with the damage formula), random and greedy (highest expected damage) players; simulate team vs team from the CLI.
 7. **Battle Strategy Agent** — an LLM picks actions with tools (legal actions, damage estimates); code validates every choice.
 8. **Opponent Analysis Agent** — threat assessment of an opposing team from deterministic matchups and damage ranges, handed to the strategy agent as verified facts.
 9. **Battle evaluation and feedback** — many seeded battles: agent vs greedy win rate and cost; a Battle Evaluation Agent reviews logs for mistakes, and its feedback is fed into the next run and measured.
@@ -106,9 +106,11 @@ Deliverable: an AI-assisted battle strategy system. Battle mechanics are determi
 
 - [x] Step 2: moves — immutable `Move` (`move_id`, slug `name`, `type`, `DamageClass` physical/special/status, `power` or `None` for status and fixed-damage moves, `accuracy` or `None` for never-miss moves, `priority` −7…+5, `pp` 1–40; status moves must not have power), parsed from PokéAPI `/move/{name}` (real fixtures for Thunderbolt and Swords Dance); Shadow-type moves and Z-moves fall outside the model and are rejected. Catalog schema v3 adds a `move` table (v1/v2 upgrade in place, data kept); `PokemonCatalog.get_move` is local-first like `get`, with `MoveNotInCatalogError`. `pokeverse move <name|id> [--json] [--offline]`. CLI `pokemon` and `move` now normalize names like agent tools do (`"Mr. Mime"`, `"Swords Dance"`, `#006`); the normalizer is renamed `normalize_identifier`. The `get_pokemon` tool description now mentions base stats. Known limit: unsupported moves (e.g. `shadow-rush`) report exit 3 "upstream failed" rather than "unsupported".
 
+- [x] Step 3: learnsets and battlers — `Pokemon.learnset` (frozenset of move slugs learnable in any game, by any method; never in `to_dict()`), parsed from the `moves` list of the `/pokemon` payload we already fetch, so no extra requests (real learnsets are 94–131 names; fetching every move's details would cost ~100 requests per Pokémon). Catalog schema v4 adds `pokemon_learnset` (one JSON array per Pokémon); v3 rows have no learnset and are re-imported on the next online lookup, moves are kept. New `pokeverse.battles` package: immutable `Battler` (a Pokémon plus 1–4 distinct moves, each learnable and with a fixed power; status and fixed-damage moves are rejected because the simplified engine cannot apply them) and `load_battler`, which checks the move count and learnset before fetching any move details. CLI: `pokeverse learnset <pokemon> [--json] [--offline]` and `pokeverse moveset <pokemon> <move>... [--json] [--offline]` (exit 2 for invalid movesets). The default moveset moved to Step 6, where the damage formula can rank moves. Known limit: Pokémon with no damaging moves (e.g. Ditto, Transform only) cannot battle.
+
 ## Next Up
 
-- Phase 3 Step 3: learnsets and battle movesets.
+- Phase 3 Step 4: battle stats and damage.
 - Carried over from Phase 2: repeated runs per cell in `compare` before ranking systems; `goal` constraints such as "Fire-only" are enforced only by the model; in `auto` mode, wrong type claims on teams without vulnerabilities are not fact-checked; the Strands spike (re-implement the Supervisor and compare with `pokeverse compare`).
 
 ## Running Locally
@@ -123,6 +125,8 @@ uv run pokeverse --version
 uv run pokeverse pokemon pikachu    # uses ~/.local/share/pokeverse/catalog.db
 uv run pokeverse list
 uv run pokeverse move "Swords Dance"
+uv run pokeverse learnset garchomp
+uv run pokeverse moveset garchomp earthquake "Dragon Claw" "Stone Edge" "Fire Fang"
 uv run pokeverse ask "What type is Pikachu?" --usage   # needs OPENAI_API_KEY in .env or the environment
 uv run pokeverse ask "What type is Pikachu?" --no-tools --usage   # model answers from memory only
 uv run pokeverse ask "What type is Pikachu?" --json              # validated structured answer

@@ -182,6 +182,29 @@ def test_to_dict_can_omit_stats() -> None:
     }
 
 
+def test_learnset_is_kept_but_not_serialized() -> None:
+    learnset = frozenset({"thunderbolt", "u-turn"})
+    pokemon = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), PIKACHU_STATS, learnset)
+
+    assert pokemon.learnset == learnset
+    assert "learnset" not in pokemon.to_dict()
+
+
+@pytest.mark.parametrize(
+    "learnset",
+    [
+        {"thunderbolt"},
+        ("thunderbolt",),
+        frozenset({"Thunderbolt"}),
+        frozenset({"swords dance"}),
+        frozenset({85}),
+    ],
+)
+def test_invalid_learnset_is_rejected(learnset: Any) -> None:
+    with pytest.raises(ValueError, match="learnset"):
+        Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), PIKACHU_STATS, learnset)
+
+
 def make_move(**overrides: Any) -> Move:
     fields: dict[str, Any] = {
         "move_id": 85,

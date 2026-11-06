@@ -12,6 +12,7 @@ from typing import Any, Self
 import httpx
 
 from pokeverse.catalog.models import (
+    NAME_PATTERN,
     BaseStats,
     DamageClass,
     Move,
@@ -49,6 +50,7 @@ def parse_pokemon(payload: Mapping[str, Any]) -> Pokemon:
 
     Types are ordered by slot. Non-elemental types that are not part of
     ``PokemonType`` (e.g. ``stellar``) are skipped. All six base stats are required.
+    The learnset keeps every move name that is a valid slug.
     """
     try:
         type_entries = sorted(payload["types"], key=lambda entry: entry["slot"])
@@ -66,7 +68,18 @@ def parse_pokemon(payload: Mapping[str, Any]) -> Pokemon:
             special_defense=base["special-defense"],
             speed=base["speed"],
         )
-        return Pokemon(pokedex_id=payload["id"], name=payload["name"], types=types, stats=stats)
+        learnset = frozenset(
+            name
+            for name in (entry["move"]["name"] for entry in payload["moves"])
+            if NAME_PATTERN.fullmatch(name)
+        )
+        return Pokemon(
+            pokedex_id=payload["id"],
+            name=payload["name"],
+            types=types,
+            stats=stats,
+            learnset=learnset,
+        )
     except (KeyError, TypeError, ValueError) as error:
         raise PokeApiResponseError(f"Malformed Pokémon payload: {error}") from error
 
