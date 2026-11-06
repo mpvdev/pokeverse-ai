@@ -7,7 +7,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
 from dotenv import find_dotenv, load_dotenv
@@ -22,6 +22,7 @@ from pokeverse.agents import (
     make_catalog_tools,
     normalize_pokemon_identifier,
 )
+from pokeverse.agents.supervisor import OptimizeMode
 from pokeverse.catalog import (
     Pokemon,
     PokemonCatalog,
@@ -299,17 +300,26 @@ def optimize_command(
 def advise_command(
     ctx: typer.Context,
     request: Annotated[str, typer.Argument(help="Any Pokémon question or team request.")],
+    optimize: Annotated[
+        str,
+        typer.Option(
+            "--optimize",
+            help="When to run the Team Optimization Agent after building: "
+            "auto (only if the team has vulnerabilities), always, or never.",
+        ),
+    ] = "auto",
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
     show_usage: Annotated[
         bool, typer.Option("--usage", help="Print delegations and token usage to stderr.")
     ] = False,
 ) -> None:
-    """Ask the Supervisor, which delegates to the Research and Team Composition agents."""
+    """Ask the Supervisor, which delegates to the research and team-building agents."""
     settings: Settings = ctx.obj
     with llm_errors():
+        supervisor_mode = cast("OptimizeMode", optimize)
         chat = OpenAIChat(LlmSettings.from_env())
         with open_catalog(settings, offline=False) as catalog:
-            result = Supervisor(chat, catalog).run(request)
+            result = Supervisor(chat, catalog, optimize=supervisor_mode).run(request)
 
     typer.echo(json.dumps(result.to_dict()) if as_json else result.answer)
     if show_usage:

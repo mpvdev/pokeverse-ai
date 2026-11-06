@@ -8,7 +8,7 @@ from typing import Any
 
 from pokeverse.agents.generalist import GeneralistAgent
 from pokeverse.agents.research import ChatModel
-from pokeverse.agents.supervisor import Supervisor, SupervisorResult
+from pokeverse.agents.supervisor import OptimizeMode, Supervisor, SupervisorResult
 from pokeverse.agents.tools import normalize_pokemon_identifier
 from pokeverse.catalog import PokemonCatalog, PokemonNotInCatalogError, PokemonType
 from pokeverse.catalog.type_chart import effectiveness
@@ -16,7 +16,7 @@ from pokeverse.llm import LlmRequestError
 from pokeverse.teams import Team, TeamAnalysis, analyze_team
 
 T = PokemonType
-SYSTEMS = ("single", "multi", "multi+opt")
+SYSTEMS = ("single", "multi", "multi+auto", "multi+opt")
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,8 +169,9 @@ def run_case(
     """Run one case on one system. Model misbehaviour fails the run; outages propagate."""
     runners: dict[str, Callable[[], tuple[str, list[str], int, tuple[str, ...]]]] = {
         "single": lambda: _single(chat, catalog, case.request),
-        "multi": lambda: _multi(chat, catalog, case.request, optimize=False),
-        "multi+opt": lambda: _multi(chat, catalog, case.request, optimize=True),
+        "multi": lambda: _multi(chat, catalog, case.request, optimize="never"),
+        "multi+auto": lambda: _multi(chat, catalog, case.request, optimize="auto"),
+        "multi+opt": lambda: _multi(chat, catalog, case.request, optimize="always"),
     }
     started = time.perf_counter()
     try:
@@ -207,7 +208,7 @@ def _single(
 
 
 def _multi(
-    chat: ChatModel, catalog: PokemonCatalog, request: str, *, optimize: bool
+    chat: ChatModel, catalog: PokemonCatalog, request: str, *, optimize: OptimizeMode
 ) -> tuple[str, list[str], int, tuple[str, ...]]:
     result = Supervisor(chat, catalog, optimize=optimize).run(request)
     errors = tuple(f"{d.agent} failed: {d.error}" for d in result.delegations if d.error)

@@ -563,18 +563,36 @@ def canned_supervisor_result() -> Any:
 
 @pytest.fixture
 def fake_supervisor(monkeypatch: pytest.MonkeyPatch, fake_chat: type[FakeChat]) -> list[str]:
+    from pokeverse.agents.supervisor import OPTIMIZE_MODES
+
     requests: list[str] = []
 
     class FakeSupervisor:
-        def __init__(self, chat: object, catalog: object) -> None:
-            pass
+        def __init__(self, chat: object, catalog: object, *, optimize: str) -> None:
+            if optimize not in OPTIMIZE_MODES:
+                raise ValueError(f"optimize must be one of {', '.join(OPTIMIZE_MODES)}")
+            self.optimize = optimize
 
         def run(self, request: str) -> Any:
-            requests.append(request)
+            requests.append(f"{request} [{self.optimize}]")
             return canned_supervisor_result()
 
     monkeypatch.setattr(cli, "Supervisor", FakeSupervisor)
     return requests
+
+
+def test_advise_passes_optimize_mode(fake_supervisor: list[str]) -> None:
+    runner.invoke(app, ["advise", "q", "--optimize", "never"])
+
+    assert fake_supervisor == ["q [never]"]
+
+
+def test_advise_rejects_unknown_optimize_mode(fake_supervisor: list[str]) -> None:
+    result = runner.invoke(app, ["advise", "q", "--optimize", "sometimes"])
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "never, auto, always" in result.stderr
+    assert fake_supervisor == []
 
 
 def test_advise_prints_answer(fake_supervisor: list[str]) -> None:
@@ -583,7 +601,7 @@ def test_advise_prints_answer(fake_supervisor: list[str]) -> None:
     assert result.exit_code == 0
     assert result.stdout == "Pikachu is Electric-type.\n"
     assert result.stderr == ""
-    assert fake_supervisor == ["What type is Pikachu?"]
+    assert fake_supervisor == ["What type is Pikachu? [auto]"]
 
 
 def test_advise_usage_shows_delegations_and_token_split(fake_supervisor: list[str]) -> None:
@@ -639,8 +657,8 @@ def test_compare_json(fake_compare: list[tuple]) -> None:
     result = runner.invoke(app, ["compare", "--case", "fire-only", "--json"])
 
     data = json.loads(result.stdout)
-    assert [run["system"] for run in data["runs"]] == ["single", "multi", "multi+opt"]
-    assert [row["passed"] for row in data["summary"]] == [0, 1, 0]
+    assert [run["system"] for run in data["runs"]] == ["single", "multi", "multi+auto", "multi+opt"]
+    assert [row["passed"] for row in data["summary"]] == [0, 1, 0, 0]
     assert data["aborted"] is None
     assert "PASS fire-only" in result.stderr
 

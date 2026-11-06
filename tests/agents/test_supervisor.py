@@ -23,20 +23,24 @@ class RoutingChat:
         delegate_to: list[tuple[str, str | dict[str, Any]]],
         answer: str = "Final answer.",
         research: dict[str, Any] = GOOD_ANSWER,
+        team: dict[str, Any] = TEAM,
     ) -> None:
         self.delegate_to = delegate_to
         self.answer = answer
         self.research = research
+        self.team = team
         self.prompts: list[tuple[str, str]] = []
 
     def complete(self, prompt: str, **kwargs: Any) -> Completion:
         system = kwargs["system"]
         self.prompts.append((system, prompt))
-        if system == SUPERVISOR_SYSTEM_PROMPT:
+        if system.startswith("You are the PokéVerse Supervisor"):
             tools = {tool.name: tool for tool in kwargs["tools"]}
             calls = []
             for name, arguments in self.delegate_to:
                 args = arguments if isinstance(arguments, dict) else {"task": arguments}
+                if name == "ask_team_builder":
+                    args = {"keep": [], **args}
                 calls.append(ToolCall(name, args, tools[name].handler(**args)))
             return Completion(self.answer, "fake", "completed", 100, 20, 9, tuple(calls))
         if system == RESEARCH_SYSTEM_PROMPT:
@@ -46,10 +50,13 @@ class RoutingChat:
             review = {"claims": [], "swaps": [], "critique": "Fine."}
             return Completion("", "fake", "completed", 60, 15, 5, (), review)
         assert system == TEAM_BUILDER_SYSTEM_PROMPT
+        names = [member["name"] for member in self.team["members"]]
         analyzed = ToolCall(
-            "analyze_team", {"names": ["pikachu"]}, {"team": {"members": [PIKACHU.to_dict()]}}
+            "analyze_team",
+            {"names": names},
+            {"team": {"members": [PIKACHU.to_dict() for _ in names]}},
         )
-        return Completion("", "fake", "completed", 200, 50, 5, (analyzed,), TEAM)
+        return Completion("", "fake", "completed", 200, 50, 5, (analyzed,), self.team)
 
 
 @pytest.fixture
@@ -75,12 +82,63 @@ def test_supervisor_without_optimizer(catalog: PokemonCatalog) -> None:
             seen.update(kwargs)
             return Completion("Answer.", "fake", "completed", 1, 1, 1)
 
-    Supervisor(Recorder(), catalog, optimize=False).run("Hi")
+    Supervisor(Recorder(), catalog, optimize="never").run("Hi")
 
     assert [tool.name for tool in seen["tools"]] == ["ask_research_agent", "ask_team_builder"]
-    assert seen["system"] == supervisor_prompt(optimize=False)
+    assert seen["system"] == supervisor_prompt("never")
     assert "ask_team_optimizer" not in seen["system"]
-    assert supervisor_prompt(optimize=True) == SUPERVISOR_SYSTEM_PROMPT
+    assert supervisor_prompt("auto") == SUPERVISOR_SYSTEM_PROMPT
+
+
+def test_unknown_optimize_mode_is_rejected(catalog: PokemonCatalog) -> None:
+    with pytest.raises(ValueError, match="never, auto, always"):
+        Supervisor(RoutingChat([]), catalog, optimize="sometimes")  # type: ignore[arg-type]
+
+
+def test_auto_mode_skips_optimizer_for_a_team_without_vulnerabilities(
+    catalog: PokemonCatalog,
+) -> None:
+    chat = RoutingChat([("ask_team_builder", "Team around Pikachu")])
+
+    result = Supervisor(chat, catalog).run("q")
+
+    (builder,) = result.delegations
+    assert builder.agent == "team_builder"
+    systems = [system for system, _ in chat.prompts]
+    assert OPTIMIZER_SYSTEM_PROMPT not in systems
+
+
+def test_auto_mode_optimizes_a_team_with_vulnerabilities(catalog: PokemonCatalog) -> None:
+    two_pikachu = {
+        "members": [{"name": "pikachu", "role": "lead"}, {"name": "pikachu", "role": "back"}],
+        "summary": "Double Pikachu.",
+    }
+    chat = RoutingChat(
+        [("ask_team_builder", {"task": "Two Pikachu", "keep": ["pikachu"]})], team=two_pikachu
+    )
+
+    result = Supervisor(chat, catalog).run("q")
+
+    builder, optimizer = result.delegations
+    assert optimizer.agent == "team_optimizer"
+    assert optimizer.task == "auto-optimize ['pikachu', 'pikachu'] (keep: ['pikachu'])"
+    optimizer_prompt = chat.prompts[-1][1]
+    assert "Keep: pikachu" in optimizer_prompt
+    assert "Goal: Two Pikachu" in optimizer_prompt
+    assert "pikachu: lead" in optimizer_prompt and "Double Pikachu." in optimizer_prompt
+
+
+def test_always_mode_leaves_optimizing_to_the_supervisor(catalog: PokemonCatalog) -> None:
+    two_pikachu = {
+        "members": [{"name": "pikachu", "role": "a"}, {"name": "pikachu", "role": "b"}],
+        "summary": "s",
+    }
+    chat = RoutingChat([("ask_team_builder", "Two Pikachu")], team=two_pikachu)
+
+    result = Supervisor(chat, catalog, optimize="always").run("q")
+
+    assert [d.agent for d in result.delegations] == ["team_builder"]
+    assert chat.prompts[0][0] == supervisor_prompt("always")
 
 
 OPTIMIZE = {"members": ["Pikachu"], "goal": "strong", "keep": ["pikachu"], "notes": "Lead."}

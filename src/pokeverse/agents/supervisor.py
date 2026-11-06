@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, get_args
 
 from pokeverse.agents.context import SharedContext, with_context
 from pokeverse.agents.optimizer import TeamOptimizationAgent
@@ -13,23 +13,37 @@ from pokeverse.catalog import PokemonCatalog, PokemonNotInCatalogError
 from pokeverse.llm import Completion, LlmRequestError, Tool
 from pokeverse.teams import MAX_TEAM_SIZE, Team
 
-OPTIMIZER_INSTRUCTIONS = (
-    "Use ask_team_optimizer to review and improve a team: after ask_team_builder returns a "
-    "team, call it with the member names, the user's goal, the Pokémon the user explicitly "
-    "required under `keep`, and the builder's member roles and summary as `notes`; also use it "
-    "when the user asks to improve a team they already have. Present the optimizer's final "
-    "team, mention accepted swaps, and correct any claims it found to be wrong. "
-)
+OptimizeMode = Literal["never", "auto", "always"]
+OPTIMIZE_MODES: tuple[str, ...] = get_args(OptimizeMode)
+
+OPTIMIZER_INSTRUCTIONS: dict[str, str] = {
+    "never": "",
+    "auto": (
+        "When the team ask_team_builder builds has vulnerabilities, the Team Optimization "
+        "Agent automatically tries to improve it and the result includes `optimization`; if it "
+        "has `final_members`, present that final team, mention accepted swaps and correct any "
+        "claims it marked wrong. Use ask_team_optimizer only when the user asks to improve a "
+        "team they already have. "
+    ),
+    "always": (
+        "Use ask_team_optimizer to review and improve a team: after ask_team_builder returns a "
+        "team, call it with the member names, the user's goal, the Pokémon the user explicitly "
+        "required under `keep`, and the builder's member roles and summary as `notes`; also use "
+        "it when the user asks to improve a team they already have. Present the optimizer's "
+        "final team, mention accepted swaps, and correct any claims it found to be wrong. "
+    ),
+}
 
 
-def supervisor_prompt(optimize: bool) -> str:
+def supervisor_prompt(optimize: OptimizeMode) -> str:
     return (
         "You are the PokéVerse Supervisor. You coordinate specialist agents and never answer "
         "Pokémon facts or build teams yourself. "
         "Use ask_research_agent for facts about specific Pokémon: types, Pokédex numbers, "
         "weaknesses, resistances and type matchups. "
-        "Use ask_team_builder to build or propose a team. "
-        + (OPTIMIZER_INSTRUCTIONS if optimize else "")
+        "Use ask_team_builder to build or propose a team, passing the Pokémon the user "
+        "explicitly required as `keep`. "
+        + OPTIMIZER_INSTRUCTIONS[optimize]
         + "Specialists cannot see the user's message: give each one a complete, self-contained "
         "task with every constraint the user stated, and do not add requirements the user did "
         "not ask for. If a request needs both, call both, and split it: give the Research Agent "
@@ -43,7 +57,7 @@ def supervisor_prompt(optimize: bool) -> str:
     )
 
 
-SUPERVISOR_SYSTEM_PROMPT = supervisor_prompt(optimize=True)
+SUPERVISOR_SYSTEM_PROMPT = supervisor_prompt("auto")
 SUPERVISOR_MAX_TOKENS = 1000
 
 TASK_PARAMETERS = {
@@ -55,6 +69,20 @@ TASK_PARAMETERS = {
         }
     },
     "required": ["task"],
+    "additionalProperties": False,
+}
+
+BUILDER_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        **TASK_PARAMETERS["properties"],
+        "keep": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Pokémon the user explicitly required; never swapped out.",
+        },
+    },
+    "required": ["task", "keep"],
     "additionalProperties": False,
 }
 
@@ -140,12 +168,20 @@ class SupervisorResult:
 
 
 class Supervisor:
-    """Delegates to the Research, Team Composition and (optionally) Team Optimization agents."""
+    """Delegates to the Research, Team Composition and Team Optimization agents.
 
-    def __init__(self, chat: ChatModel, catalog: PokemonCatalog, *, optimize: bool = True) -> None:
+    ``optimize`` controls the optimizer: ``never``; ``auto`` (code runs it after a build only
+    when the team has vulnerabilities); or ``always`` (the supervisor is told to run it).
+    """
+
+    def __init__(
+        self, chat: ChatModel, catalog: PokemonCatalog, *, optimize: OptimizeMode = "auto"
+    ) -> None:
+        if optimize not in OPTIMIZE_MODES:
+            raise ValueError(f"optimize must be one of {', '.join(OPTIMIZE_MODES)}")
         self._chat = chat
         self._catalog = catalog
-        self._optimize_teams = optimize
+        self._mode: OptimizeMode = optimize
         self._research = ResearchAgent(chat, catalog)
         self._team_builder = TeamCompositionAgent(chat, catalog)
         self._optimizer = TeamOptimizationAgent(chat, catalog)
@@ -188,6 +224,24 @@ class Supervisor:
             )
             return output
 
+        def build_team(task: str, keep: list[str]) -> dict[str, Any]:
+            output = delegate(
+                "team_builder", task, lambda ctx: self._team_builder.build(with_context(task, ctx))
+            )
+            if self._mode != "auto" or "error" in output:
+                return output
+            if not output["analysis"]["vulnerabilities"]:
+                return {**output, "optimization": {"skipped": "the team has no vulnerabilities"}}
+            members = [member["name"] for member in output["members"]]
+            roles = "\n".join(f"{m['name']}: {m['role']}" for m in output["members"])
+            notes = f"{roles}\n{output['summary']}"
+            optimization = delegate(
+                "team_optimizer",
+                f"auto-optimize {members} (keep: {keep or 'none'})",
+                lambda ctx: self._optimize(members, task, keep, notes, ctx),
+            )
+            return {**output, "optimization": optimization}
+
         tools = (
             Tool(
                 name="ask_research_agent",
@@ -211,13 +265,15 @@ class Supervisor:
                     "Ask the Team Composition Agent to build a team. Returns `members` with "
                     "roles, its `summary`, a deterministic `analysis` (vulnerabilities, "
                     "unresisted types, offensive gaps) and `self_checked`, or an error object."
+                    + (
+                        " Also returns `optimization`: the optimizer's result when the team had "
+                        "vulnerabilities, otherwise why it was skipped."
+                        if self._mode == "auto"
+                        else ""
+                    )
                 ),
-                parameters=TASK_PARAMETERS,
-                handler=lambda task: delegate(
-                    "team_builder",
-                    task,
-                    lambda ctx: self._team_builder.build(with_context(task, ctx)),
-                ),
+                parameters=BUILDER_PARAMETERS,
+                handler=build_team,
             ),
             Tool(
                 name="ask_team_optimizer",
@@ -236,11 +292,11 @@ class Supervisor:
                 ),
             ),
         )
-        if not self._optimize_teams:
+        if self._mode == "never":
             tools = tools[:2]
         completion = self._chat.complete(
             request,
-            system=supervisor_prompt(self._optimize_teams),
+            system=supervisor_prompt(self._mode),
             max_tokens=SUPERVISOR_MAX_TOKENS,
             tools=tools,
         )

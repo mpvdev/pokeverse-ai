@@ -2,9 +2,13 @@
 
 ## Current Phase
 
-**Phase 2 — Multi-Agent Trainer System** (branch `phase-2`). Phase 1 is complete on branch `phase-1`.
+**Phase 3 — Battle Intelligence** (not started). Phase 2 is complete on branch `phase-2`.
 
 ## Completed
+
+### Phase 2 — Multi-Agent Trainer System (branch `phase-2`)
+
+Deliverable: a multi-agent Pokémon team advisor. `pokeverse advise` routes any request through a Supervisor to the Research, Team Composition and Team Optimization agents, hands verified facts between them, and re-checks every team and type claim with deterministic code; `pokeverse compare` measures it against a single-agent baseline.
 
 ### Phase 1 — Intelligent Pokédex (branch `phase-1`)
 
@@ -80,9 +84,12 @@ Deliverable: a multi-agent Pokémon team advisor.
 
 - [x] Step 7: multi- vs single-agent evaluation — `GeneralistAgent` (one agent, all tools, `{answer, team}` output) as the baseline; `Supervisor(optimize=False)`; `pokeverse.evals.compare` with 5 fixed tasks scored only by code (required facts, team size, must-include members, type constraints, attack types the team must resist, max vulnerabilities, answer names the produced team); teams taken from observed output and re-analyzed. `pokeverse compare [--case] [--system] [--json]` streams progress and keeps partial results if an outage aborts the run. Results (gpt-5.6-terra, effort low, one run per cell): single 4/5, ~25k tokens; multi 5/5, ~47k; multi+opt 5/5, ~64k. Only the constrained "4 Fire-types, ≤2 vulnerabilities" task separates them: single failed it in both runs, both multi systems pass, multi+opt with the best team. On easy tasks single is as good and 2–4× cheaper; the optimizer added cost without extra passes (its builds already had no vulnerabilities). Found and fixed on the way: the team builder was cut off at 1,500 output tokens on constrained tasks (now 3,000; reasoning counts), and failed delegations were invisible in the comparison (now listed when a run fails; recovered errors don't fail a run). Caveat: one sample per cell — differences in score between runs are partly sampling variance.
 
+- [x] Step 8: `pokeverse advise` end to end — the Supervisor's optimizer use is now a mode: `never`, `auto` (default; after a successful build, code runs the optimizer only if the team has vulnerabilities, passing the user's required members as `keep`) or `always` (the Step 6 behaviour). `ask_team_builder` takes `keep`; `advise --optimize`; `compare` adds `multi+auto`. Live: multi+auto 4/5 at ~46k tokens (vs multi+opt ~64k); the optimizer was skipped on clean builds. Fire-only failed in that run because the builder's first draft had 3 vulnerabilities; a replay showed auto mode working (2 vulnerabilities → optimizer triggered → Camerupt → Heatran accepted, score (2,6,10,7) → (2,6,6,8), 18k tokens). On that task every multi-agent system has both passed and failed across runs — builder variance dominates; repeated runs are needed to rank them.
+
 ## Next Up
 
-- Phase 2, Step 8: `pokeverse advise` end to end — apply the Step 7 findings (run the optimizer only when the built team has vulnerabilities or claims to check) and close the phase.
+- Phase 3 — Battle Intelligence: deterministic battle mechanics, battle strategy agents, simulated battles, opponent analysis, outcome evaluation.
+- Carried over from Phase 2: repeated runs per cell in `compare` before ranking systems; `goal` constraints such as "Fire-only" are enforced only by the model; in `auto` mode, wrong type claims on teams without vulnerabilities are not fact-checked; the Strands spike (re-implement the Supervisor and compare with `pokeverse compare`).
 
 ## Running Locally
 
@@ -103,6 +110,7 @@ uv run pokeverse eval                                            # evaluation su
 uv run pokeverse team charizard blastoise venusaur              # deterministic team analysis
 uv run pokeverse build "A balanced team of 6 around Pikachu"    # Team Composition Agent
 uv run pokeverse advise "Is Gengar weak to Psychic?" --usage    # Supervisor (delegates)
+uv run pokeverse advise "Build a team of 4 Fire-type Pokémon only" --optimize auto --usage
 uv run pokeverse optimize reshiram turtonator gouging-fire volcanion --goal "Fire-only"   # Team Optimization Agent
 uv run pokeverse compare --case fire-only                       # single vs multi-agent (live, costly)
 ```
