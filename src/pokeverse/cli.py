@@ -16,6 +16,8 @@ from dotenv import find_dotenv, load_dotenv
 from pokeverse.agents import (
     POKEDEX_ANSWER_SCHEMA,
     BattleStrategyAgent,
+    OpponentAnalysis,
+    OpponentAnalysisAgent,
     PokedexAnswer,
     ResearchAgent,
     Supervisor,
@@ -176,12 +178,23 @@ def format_battler(battler: Battler) -> str:
 BATTLE_PLAYERS = (*PLAYER_NAMES, "agent")
 
 
-def make_battle_player(name: str, seed: str, chat: OpenAIChat | None) -> Player:
+def make_battle_player(
+    name: str, seed: str, chat: OpenAIChat | None, analysis: OpponentAnalysis | None
+) -> Player:
     if name == "agent":
         if chat is None:
             raise ValueError("the agent player needs an LLM client")
-        return BattleStrategyAgent(chat)
+        return BattleStrategyAgent(chat, analysis=analysis)
     return make_player(name, random.Random(seed))
+
+
+def print_analysis_report(analysis: OpponentAnalysis) -> None:
+    for threat in analysis.threats:
+        typer.echo(f"  threat {threat.foe} [{threat.danger}]: {threat.reason}")
+    for counter in analysis.counters:
+        status = "verified" if counter.verified else "NOT supported by the matchups"
+        typer.echo(f"  counter {counter.answer} -> {counter.threat} ({status}): {counter.reason}")
+    typer.echo(f"  plan: {analysis.plan}")
 
 
 @app.command("pokemon")
@@ -398,6 +411,13 @@ def battle_command(
     runs: Annotated[
         int, typer.Option("--runs", min=1, help="Number of battles (seeds seed, seed+1, ...).")
     ] = 1,
+    analysis: Annotated[
+        bool,
+        typer.Option(
+            "--analysis/--no-analysis",
+            help="Brief agent players with a pre-battle Opponent Analysis Agent run.",
+        ),
+    ] = True,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
     offline: Annotated[
         bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
@@ -407,6 +427,7 @@ def battle_command(
     settings: Settings = ctx.obj
     names = (player1, player2)
     results: list[tuple[int, BattleResult, list[BattleStrategyAgent]]] = []
+    analyses: dict[int, OpponentAnalysis] = {}
     try:
         with llm_errors():
             for name in names:
@@ -425,10 +446,15 @@ def battle_command(
                     [resolve_battler(catalog, *parse_member(spec)) for spec in side]
                     for side in (side1, side2)
                 ]
+            if chat is not None and analysis:
+                for side, name in enumerate(names):
+                    if name == "agent":
+                        analyst = OpponentAnalysisAgent(chat)
+                        analyses[side] = analyst.analyze(teams[side], teams[1 - side])
             for battle_seed in range(seed, seed + runs):
                 players = (
-                    make_battle_player(player1, f"{battle_seed}:1", chat),
-                    make_battle_player(player2, f"{battle_seed}:2", chat),
+                    make_battle_player(player1, f"{battle_seed}:1", chat, analyses.get(0)),
+                    make_battle_player(player2, f"{battle_seed}:2", chat, analyses.get(1)),
                 )
                 result = run_battle(teams[0], teams[1], players, random.Random(battle_seed))
                 agents = [p for p in players if isinstance(p, BattleStrategyAgent)]
@@ -441,6 +467,7 @@ def battle_command(
         for team in teams
     ]
     agent_tokens = sum(agent.total_tokens for _, _, agents in results for agent in agents)
+    analysis_tokens = sum(a.completion.total_tokens for a in analyses.values())
     fallbacks = sum(agent.fallbacks for _, _, agents in results for agent in agents)
     if runs == 1:
         battle_seed, result, agents = results[0]
@@ -458,12 +485,17 @@ def battle_command(
                 "events": [event.to_dict() for event in result.events],
                 "decisions": [decision.to_dict() for decision in decisions],
                 "agent_tokens": agent_tokens,
+                "analyses": {str(side): a.to_dict() for side, a in analyses.items()},
+                "analysis_tokens": analysis_tokens,
             }
             typer.echo(json.dumps(report))
             return
         for index, team in enumerate(teams):
             members = ", ".join(format_battler(battler) for battler in team)
             typer.echo(f"Side {index + 1} ({names[index]}): {members}")
+        for side, side_analysis in analyses.items():
+            typer.echo(f"Side {side + 1} pre-battle analysis:")
+            print_analysis_report(side_analysis)
         for event in result.events:
             typer.echo(f"[{event.turn}] {event.describe()}")
         if result.winner is None:
@@ -479,7 +511,10 @@ def battle_command(
                     f"  turn {decision.turn}, side {decision.side + 1}: "
                     f"{decision.action}{marker} — {decision.reason}"
                 )
-            typer.echo(f"Agent tokens: {agent_tokens}; fallbacks: {fallbacks}.")
+            typer.echo(
+                f"Agent tokens: {agent_tokens} (+{analysis_tokens} analysis); "
+                f"fallbacks: {fallbacks}."
+            )
         return
 
     wins = [sum(1 for _, r, _ in results if r.winner == side) for side in (0, 1)]
@@ -495,6 +530,7 @@ def battle_command(
             "average_turns": average,
             "agent_tokens": agent_tokens,
             "agent_fallbacks": fallbacks,
+            "analysis_tokens": analysis_tokens,
             "results": [{"seed": s, "winner": r.winner, "turns": r.turns} for s, r, _ in results],
         }
         typer.echo(json.dumps(report))
@@ -505,7 +541,56 @@ def battle_command(
         f"draws {draws}; average {average:.1f} turns."
     )
     if "agent" in names:
-        typer.echo(f"Agent tokens: {agent_tokens}; fallbacks: {fallbacks}.")
+        typer.echo(
+            f"Agent tokens: {agent_tokens} (+{analysis_tokens} analysis); fallbacks: {fallbacks}."
+        )
+
+
+@app.command("scout")
+def scout_command(
+    ctx: typer.Context,
+    side1: Annotated[
+        list[str],
+        typer.Option("--side1", help="Our member: 'name' or 'name:move,move'; repeat per member."),
+    ],
+    side2: Annotated[
+        list[str],
+        typer.Option("--side2", help="An opposing member, same format as --side1."),
+    ],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+    show_usage: Annotated[
+        bool, typer.Option("--usage", help="Print token usage to stderr.")
+    ] = False,
+) -> None:
+    """Ask the Opponent Analysis Agent to rank side 2's threats to side 1; code checks counters."""
+    settings: Settings = ctx.obj
+    try:
+        with llm_errors():
+            for side in (side1, side2):
+                if len(side) > MAX_TEAM_SIZE:
+                    raise ValueError(
+                        f"a battle team must have between 1 and {MAX_TEAM_SIZE} battlers"
+                    )
+            chat = OpenAIChat(LlmSettings.from_env())
+            with open_catalog(settings, offline=offline) as catalog:
+                own = [resolve_battler(catalog, *parse_member(spec)) for spec in side1]
+                foe = [resolve_battler(catalog, *parse_member(spec)) for spec in side2]
+            result = OpponentAnalysisAgent(chat).analyze(own, foe)
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+
+    if as_json:
+        typer.echo(json.dumps(result.to_dict()))
+    else:
+        typer.echo(f"Side 2 threats to side 1 ({', '.join(b.pokemon.name for b in own)}):")
+        print_analysis_report(result)
+        typer.echo("\nBriefing handed to the Battle Strategy Agent:")
+        typer.echo(result.briefing())
+    if show_usage:
+        print_usage(result.completion)
 
 
 @app.command("team")

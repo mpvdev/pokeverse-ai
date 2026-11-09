@@ -35,6 +35,7 @@ from pokeverse.battles.engine import (
     run_battle,
     start_battle,
 )
+from pokeverse.battles.matchups import Matchup, matchup
 from pokeverse.battles.movesets import choose_moveset, default_battler, move_score
 from pokeverse.battles.players import PLAYER_NAMES, GreedyPlayer, RandomPlayer, make_player
 from pokeverse.battles.stats import LEVEL, BattleStats, battle_stats
@@ -58,6 +59,7 @@ __all__ = [
     "DamageRoll",
     "GreedyPlayer",
     "IllegalActionError",
+    "Matchup",
     "Player",
     "RandomPlayer",
     "Side",
@@ -73,6 +75,7 @@ __all__ = [
     "legal_actions",
     "load_battler",
     "make_player",
+    "matchup",
     "move_score",
     "play_turn",
     "replace_fainted",

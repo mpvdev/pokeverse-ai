@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Any
 
+from pokeverse.agents.opponent_analysis import OpponentAnalysis
 from pokeverse.agents.research import ChatModel
 from pokeverse.battles import (
     Action,
@@ -181,10 +182,12 @@ class BattleStrategyAgent:
         self,
         chat: ChatModel,
         *,
+        analysis: OpponentAnalysis | None = None,
         temperature: float | None = None,
         max_tokens: int = STRATEGY_MAX_TOKENS,
     ) -> None:
         self._chat = chat
+        self._analysis = analysis
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._fallback = GreedyPlayer()
@@ -207,8 +210,12 @@ class BattleStrategyAgent:
             return options[0]
 
         try:
+            prompt = describe_situation(state, side, options)
+            briefing = self._analysis.briefing(state, side) if self._analysis else ""
+            if briefing:
+                prompt = f"{prompt}\n\n{briefing}"
             completion = self._chat.complete(
-                describe_situation(state, side, options),
+                prompt,
                 system=BATTLE_STRATEGY_SYSTEM_PROMPT,
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,

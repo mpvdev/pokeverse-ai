@@ -2,6 +2,7 @@
 
 from pokeverse.agents.answers import POKEDEX_ANSWER_SCHEMA, Confidence, PokedexAnswer
 from pokeverse.agents.battle_strategy import BattleDecision, BattleStrategyAgent
+from pokeverse.agents.opponent_analysis import OpponentAnalysis, OpponentAnalysisAgent
 from pokeverse.agents.optimizer import OptimizationResult, TeamOptimizationAgent
 from pokeverse.agents.research import RESEARCH_SYSTEM_PROMPT, ResearchAgent, ResearchResult
 from pokeverse.agents.supervisor import Delegation, Supervisor, SupervisorResult
@@ -25,6 +26,8 @@ __all__ = [
     "BattleStrategyAgent",
     "Confidence",
     "Delegation",
+    "OpponentAnalysis",
+    "OpponentAnalysisAgent",
     "OptimizationResult",
     "PokedexAnswer",
     "ResearchAgent",

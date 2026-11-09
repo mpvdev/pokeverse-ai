@@ -465,7 +465,7 @@ class FakeChat:
 
     calls: list[dict[str, object]] = []
     error: Exception | None = None
-    data: dict[str, Any] | None = None
+    data: Any = None
     analyzed: list[str] | None = None
 
     def __init__(self, settings: object = None) -> None:
@@ -482,6 +482,8 @@ class FakeChat:
             arguments = FakeChat.arguments_for(tool)
             tool_calls.append(ToolCall(tool.name, arguments, tool.handler(**arguments)))
         data = FakeChat.data if kwargs.get("output_schema") else None
+        if callable(data):
+            data = data(kwargs["output_schema"])
         return Completion(
             "Pikachu is Electric-type.",
             "fake-model",
@@ -523,7 +525,62 @@ AGENT_BATTLE = [
     "pikachu:thunderbolt",
     "--player1",
     "agent",
+    "--no-analysis",
 ]
+
+
+def analysis_or_decision(schema: Any) -> dict[str, Any]:
+    properties = schema.schema["properties"]
+    if schema.name == "opponent_analysis":
+        foe = properties["threats"]["items"]["properties"]["foe"]["enum"]
+        own = properties["counters"]["items"]["properties"]["answer"]["enum"]
+        return {
+            "threats": [{"foe": f, "danger": "high", "reason": "Mirror."} for f in foe],
+            "counters": [{"threat": foe[0], "answer": own[0], "reason": "Priority."}],
+            "plan": "Lead with Pikachu.",
+        }
+    return {"action": properties["action"]["enum"][-1], "reason": "Last option."}
+
+
+def test_battle_briefs_the_agent_with_a_pre_battle_analysis(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = analysis_or_decision
+
+    result = runner.invoke(app, AGENT_BATTLE[:-1])
+
+    assert result.exit_code == 0
+    assert "Side 1 pre-battle analysis:" in result.stdout
+    assert "  threat foe-0:pikachu [high]: Mirror." in result.stdout
+    assert "  plan: Lead with Pikachu." in result.stdout
+    first, *decisions = fake_chat.calls
+    assert first["output_schema"].name == "opponent_analysis"
+    assert "Matchup table" in first["prompt"]
+    assert all("Pre-battle analysis" in call["prompt"] for call in decisions)
+    assert "(+15 analysis)" in result.stdout
+
+
+def test_scout_reports_threats_counters_and_the_briefing(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = analysis_or_decision
+
+    result = runner.invoke(
+        app, ["scout", "--side1", "pikachu:thunderbolt,quick-attack", "--side2", "pikachu:surf"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "  threat foe-0:pikachu [high]: Mirror." in result.stdout
+    assert "counter own-0:pikachu -> foe-0:pikachu" in result.stdout
+    assert "Briefing handed to the Battle Strategy Agent:" in result.stdout
+
+
+def test_scout_json(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = analysis_or_decision
+
+    result = runner.invoke(
+        app, ["scout", "--side1", "pikachu:thunderbolt", "--side2", "pikachu:thunderbolt", "--json"]
+    )
+
+    report = json.loads(result.stdout)
+    assert report["threats"][0]["foe"] == "foe-0:pikachu"
+    assert report["plan"] == "Lead with Pikachu."
 
 
 def test_battle_with_the_agent_prints_its_decisions(fake_chat: type[FakeChat]) -> None:
