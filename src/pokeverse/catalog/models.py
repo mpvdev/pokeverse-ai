@@ -1,9 +1,12 @@
 """Core domain models for the Pokémon catalog."""
 
 import re
-from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any, Self
+
+from pydantic import Field, StringConstraints, field_validator, model_validator
+
+from pokeverse.model import FrozenModel
 
 # Matches PokéAPI resource slugs, e.g. "pikachu", "mr-mime", "porygon2".
 NAME_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -18,12 +21,8 @@ MIN_PRIORITY = -7
 MAX_PRIORITY = 5
 MAX_PP = 40
 
-
-def _check_range(name: str, value: object, low: int, high: int) -> None:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ValueError(f"{name} must be an integer")
-    if not low <= value <= high:
-        raise ValueError(f"{name} must be between {low} and {high}")
+Slug = Annotated[str, StringConstraints(pattern=f"^{NAME_PATTERN.pattern}$")]
+BaseStat = Annotated[int, Field(ge=MIN_BASE_STAT, le=MAX_BASE_STAT)]
 
 
 class PokemonType(StrEnum):
@@ -49,31 +48,25 @@ class PokemonType(StrEnum):
     FAIRY = "fairy"
 
 
-@dataclass(frozen=True, slots=True)
-class BaseStats:
+class BaseStats(FrozenModel):
     """A species' six base stats. Field names match PokéAPI stat names with ``_`` for ``-``."""
 
-    hp: int
-    attack: int
-    defense: int
-    special_attack: int
-    special_defense: int
-    speed: int
-
-    def __post_init__(self) -> None:
-        for stat in fields(self):
-            _check_range(stat.name, getattr(self, stat.name), MIN_BASE_STAT, MAX_BASE_STAT)
+    hp: BaseStat
+    attack: BaseStat
+    defense: BaseStat
+    special_attack: BaseStat
+    special_defense: BaseStat
+    speed: BaseStat
 
     @property
     def total(self) -> int:
         return sum(self.to_dict().values())
 
     def to_dict(self) -> dict[str, int]:
-        return asdict(self)
+        return self.model_dump()
 
 
-@dataclass(frozen=True, slots=True)
-class Pokemon:
+class Pokemon(FrozenModel):
     """A validated, immutable Pokémon reference record.
 
     ``name`` must be a canonical PokéAPI slug (lowercase, hyphen-separated).
@@ -81,37 +74,18 @@ class Pokemon:
     such as the ingestion pipeline or CLI, not of this model.
     """
 
-    pokedex_id: int
-    name: str
-    types: tuple[PokemonType, ...]
-    stats: BaseStats
-    learnset: frozenset[str] = frozenset()
+    pokedex_id: int = Field(gt=0)
+    name: Slug
+    types: tuple[PokemonType, ...] = Field(min_length=1, max_length=MAX_TYPES)
+    stats: BaseStats = Field(serialization_alias="base_stats")
+    learnset: frozenset[Slug] = Field(default=frozenset(), exclude=True)
 
-    def __post_init__(self) -> None:
-        if isinstance(self.pokedex_id, bool) or not isinstance(self.pokedex_id, int):
-            raise ValueError("pokedex_id must be an integer")
-        if self.pokedex_id <= 0:
-            raise ValueError("pokedex_id must be positive")
-
-        if not isinstance(self.name, str) or not NAME_PATTERN.fullmatch(self.name):
-            raise ValueError("name must be a lowercase, hyphen-separated slug (e.g. 'mr-mime')")
-
-        if not isinstance(self.types, tuple):
-            raise ValueError("types must be a tuple")
-        if not 1 <= len(self.types) <= MAX_TYPES:
-            raise ValueError(f"types must contain between 1 and {MAX_TYPES} entries")
-        if not all(isinstance(pokemon_type, PokemonType) for pokemon_type in self.types):
-            raise ValueError("types must contain only PokemonType values")
-        if len(set(self.types)) != len(self.types):
+    @field_validator("types")
+    @classmethod
+    def _distinct_types(cls, types: tuple[PokemonType, ...]) -> tuple[PokemonType, ...]:
+        if len(set(types)) != len(types):
             raise ValueError("types must not contain duplicates")
-
-        if not isinstance(self.stats, BaseStats):
-            raise ValueError("stats must be BaseStats")
-
-        if not isinstance(self.learnset, frozenset) or not all(
-            isinstance(move, str) and NAME_PATTERN.fullmatch(move) for move in self.learnset
-        ):
-            raise ValueError("learnset must be a frozenset of move slugs")
+        return types
 
     @property
     def display_name(self) -> str:
@@ -124,14 +98,7 @@ class Pokemon:
         ``stats=False`` omits base stats where only identity and types matter (saves tokens).
         The learnset (often 100+ names) is never included.
         """
-        data: dict[str, Any] = {
-            "pokedex_id": self.pokedex_id,
-            "name": self.name,
-            "types": [pokemon_type.value for pokemon_type in self.types],
-        }
-        if stats:
-            data["base_stats"] = self.stats.to_dict()
-        return data
+        return self.model_dump(mode="json", by_alias=True, exclude=None if stats else {"stats"})
 
 
 class DamageClass(StrEnum):
@@ -142,58 +109,48 @@ class DamageClass(StrEnum):
     STATUS = "status"
 
 
-@dataclass(frozen=True, slots=True)
-class Move:
+class Move(FrozenModel):
     """A validated, immutable move reference record (values as in PokéAPI).
 
     ``power`` is ``None`` for status moves and for damaging moves whose damage is not
     power-based (e.g. Seismic Toss). ``accuracy`` is ``None`` for moves that never miss.
     """
 
-    move_id: int
-    name: str
+    move_id: int = Field(gt=0)
+    name: Slug
     type: PokemonType
     damage_class: DamageClass
-    power: int | None
-    accuracy: int | None
-    priority: int
-    pp: int
+    power: Annotated[int, Field(ge=1, le=MAX_MOVE_POWER)] | None
+    accuracy: Annotated[int, Field(ge=1, le=100)] | None
+    priority: int = Field(ge=MIN_PRIORITY, le=MAX_PRIORITY)
+    pp: int = Field(ge=1, le=MAX_PP)
 
-    def __post_init__(self) -> None:
-        if isinstance(self.move_id, bool) or not isinstance(self.move_id, int):
-            raise ValueError("move_id must be an integer")
-        if self.move_id <= 0:
-            raise ValueError("move_id must be positive")
-        if not isinstance(self.name, str) or not NAME_PATTERN.fullmatch(self.name):
-            raise ValueError("name must be a lowercase, hyphen-separated slug (e.g. 'u-turn')")
-        if not isinstance(self.type, PokemonType):
-            raise ValueError("type must be a PokemonType")
-        if not isinstance(self.damage_class, DamageClass):
-            raise ValueError("damage_class must be a DamageClass")
-        if self.power is not None:
-            if self.damage_class is DamageClass.STATUS:
-                raise ValueError("status moves must not have power")
-            _check_range("power", self.power, 1, MAX_MOVE_POWER)
-        if self.accuracy is not None:
-            _check_range("accuracy", self.accuracy, 1, 100)
-        _check_range("priority", self.priority, MIN_PRIORITY, MAX_PRIORITY)
-        _check_range("pp", self.pp, 1, MAX_PP)
+    @model_validator(mode="after")
+    def _status_moves_have_no_power(self) -> Self:
+        if self.damage_class is DamageClass.STATUS and self.power is not None:
+            raise ValueError("status moves must not have power")
+        return self
 
     @property
     def display_name(self) -> str:
         return self.name.replace("-", " ").title()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "move_id": self.move_id,
-            "name": self.name,
-            "type": self.type.value,
-            "damage_class": self.damage_class.value,
-            "power": self.power,
-            "accuracy": self.accuracy,
-            "priority": self.priority,
-            "pp": self.pp,
-        }
+        return self.model_dump(mode="json")
+
+
+class PokemonEntry(FrozenModel):
+    """One line of the upstream Pokémon index: an id and its slug, no details."""
+
+    pokedex_id: int = Field(gt=0)
+    name: Slug
+
+
+class PokemonIndex(FrozenModel):
+    """One page of the upstream Pokémon index; ``count`` is the total across pages."""
+
+    count: int = Field(ge=0)
+    results: tuple[PokemonEntry, ...]
 
 
 def parse_identifier(name_or_id: str | int) -> str | int:

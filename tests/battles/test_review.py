@@ -1,5 +1,3 @@
-from dataclasses import replace
-
 from pokeverse.battles import (
     Action,
     Battler,
@@ -19,38 +17,101 @@ from pokeverse.catalog import BaseStats, DamageClass, Move, Pokemon, PokemonType
 T = PokemonType
 D = DamageClass
 
-EARTHQUAKE = Move(89, "earthquake", T.GROUND, D.PHYSICAL, 100, 100, 0, 10)
-DRAGON_CLAW = Move(337, "dragon-claw", T.DRAGON, D.PHYSICAL, 80, 100, 0, 15)
-THUNDERBOLT = Move(85, "thunderbolt", T.ELECTRIC, D.SPECIAL, 90, 100, 0, 15)
-QUICK_ATTACK = Move(98, "quick-attack", T.NORMAL, D.PHYSICAL, 40, 100, 1, 30)
-FLAMETHROWER = Move(53, "flamethrower", T.FIRE, D.SPECIAL, 90, 100, 0, 15)
+EARTHQUAKE = Move(
+    move_id=89,
+    name="earthquake",
+    type=T.GROUND,
+    damage_class=D.PHYSICAL,
+    power=100,
+    accuracy=100,
+    priority=0,
+    pp=10,
+)
+DRAGON_CLAW = Move(
+    move_id=337,
+    name="dragon-claw",
+    type=T.DRAGON,
+    damage_class=D.PHYSICAL,
+    power=80,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+THUNDERBOLT = Move(
+    move_id=85,
+    name="thunderbolt",
+    type=T.ELECTRIC,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+QUICK_ATTACK = Move(
+    move_id=98,
+    name="quick-attack",
+    type=T.NORMAL,
+    damage_class=D.PHYSICAL,
+    power=40,
+    accuracy=100,
+    priority=1,
+    pp=30,
+)
+FLAMETHROWER = Move(
+    move_id=53,
+    name="flamethrower",
+    type=T.FIRE,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
 
 LEARNSET = frozenset(
     move.name for move in (EARTHQUAKE, DRAGON_CLAW, THUNDERBOLT, QUICK_ATTACK, FLAMETHROWER)
 )
 GARCHOMP_SPECIES = Pokemon(
-    445, "garchomp", (T.DRAGON, T.GROUND), BaseStats(108, 130, 95, 80, 85, 102), LEARNSET
+    pokedex_id=445,
+    name="garchomp",
+    types=(T.DRAGON, T.GROUND),
+    stats=BaseStats(
+        hp=108, attack=130, defense=95, special_attack=80, special_defense=85, speed=102
+    ),
+    learnset=LEARNSET,
 )
-PIKACHU_SPECIES = Pokemon(25, "pikachu", (T.ELECTRIC,), BaseStats(35, 55, 40, 50, 50, 90), LEARNSET)
+PIKACHU_SPECIES = Pokemon(
+    pokedex_id=25,
+    name="pikachu",
+    types=(T.ELECTRIC,),
+    stats=BaseStats(hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=90),
+    learnset=LEARNSET,
+)
 CHARIZARD_SPECIES = Pokemon(
-    6, "charizard", (T.FIRE, T.FLYING), BaseStats(78, 84, 78, 109, 85, 100), LEARNSET
+    pokedex_id=6,
+    name="charizard",
+    types=(T.FIRE, T.FLYING),
+    stats=BaseStats(
+        hp=78, attack=84, defense=78, special_attack=109, special_defense=85, speed=100
+    ),
+    learnset=LEARNSET,
 )
 
-GARCHOMP = Battler(GARCHOMP_SPECIES, (EARTHQUAKE, DRAGON_CLAW))
-EARTHQUAKE_ONLY = Battler(GARCHOMP_SPECIES, (EARTHQUAKE,))
-SLOW_PIKACHU = Battler(PIKACHU_SPECIES, (THUNDERBOLT,))
-QUICK_PIKACHU = Battler(PIKACHU_SPECIES, (THUNDERBOLT, QUICK_ATTACK))
-CHARIZARD = Battler(CHARIZARD_SPECIES, (FLAMETHROWER,))
+GARCHOMP = Battler(pokemon=GARCHOMP_SPECIES, moves=(EARTHQUAKE, DRAGON_CLAW))
+EARTHQUAKE_ONLY = Battler(pokemon=GARCHOMP_SPECIES, moves=(EARTHQUAKE,))
+SLOW_PIKACHU = Battler(pokemon=PIKACHU_SPECIES, moves=(THUNDERBOLT,))
+QUICK_PIKACHU = Battler(pokemon=PIKACHU_SPECIES, moves=(THUNDERBOLT, QUICK_ATTACK))
+CHARIZARD = Battler(pokemon=CHARIZARD_SPECIES, moves=(FLAMETHROWER,))
 
 
 def choice(state: BattleState, action: Action, side: int = 0) -> Choice:
-    return Choice(state, side, legal_actions(state, side), action)
+    return Choice(state=state, side=side, options=legal_actions(state, side), action=action)
 
 
 def test_missing_a_safe_knockout_is_a_mistake() -> None:
     state = start_battle([GARCHOMP, CHARIZARD], [SLOW_PIKACHU])
 
-    mistake = judge(choice(state, Switch(1)))
+    mistake = judge(choice(state, Switch(index=1)))
 
     assert mistake is not None
     assert (mistake.kind, mistake.turn, mistake.chosen, mistake.better) == (
@@ -59,32 +120,36 @@ def test_missing_a_safe_knockout_is_a_mistake() -> None:
         "switching to Charizard",
         "Earthquake",
     )
-    assert judge(choice(state, UseMove(0))) is None
+    assert judge(choice(state, UseMove(index=0))) is None
 
 
 def test_a_knockout_the_foe_can_outprioritize_is_not_safe() -> None:
     state = start_battle([GARCHOMP, CHARIZARD], [QUICK_PIKACHU])
 
-    assert judge(choice(state, Switch(1))) is None
+    assert judge(choice(state, Switch(index=1))) is None
 
 
 def test_a_knockout_that_can_miss_is_not_safe() -> None:
-    shaky = replace(EARTHQUAKE, accuracy=70)
-    species = replace(GARCHOMP_SPECIES)
-    state = start_battle([Battler(species, (shaky, DRAGON_CLAW)), CHARIZARD], [SLOW_PIKACHU])
+    shaky = EARTHQUAKE.model_copy(update={"accuracy": 70})
+    species = GARCHOMP_SPECIES
+    state = start_battle(
+        [Battler(pokemon=species, moves=(shaky, DRAGON_CLAW)), CHARIZARD], [SLOW_PIKACHU]
+    )
 
-    assert judge(choice(state, Switch(1))) is not None
-    assert judge(choice(state, Switch(1))).better == "Dragon Claw"
+    assert judge(choice(state, Switch(index=1))) is not None
+    assert judge(choice(state, Switch(index=1))).better == "Dragon Claw"
 
-    claw_misses = replace(DRAGON_CLAW, accuracy=90)
-    state = start_battle([Battler(species, (shaky, claw_misses)), CHARIZARD], [SLOW_PIKACHU])
-    assert judge(choice(state, Switch(1))) is None
+    claw_misses = DRAGON_CLAW.model_copy(update={"accuracy": 90})
+    state = start_battle(
+        [Battler(pokemon=species, moves=(shaky, claw_misses)), CHARIZARD], [SLOW_PIKACHU]
+    )
+    assert judge(choice(state, Switch(index=1))) is None
 
 
 def test_using_a_move_with_no_effect_is_a_mistake() -> None:
     state = start_battle([GARCHOMP], [CHARIZARD])
 
-    mistake = judge(choice(state, UseMove(0)))
+    mistake = judge(choice(state, UseMove(index=0)))
 
     assert mistake is not None
     assert (mistake.kind, mistake.better) == ("no_effect", "Dragon Claw")
@@ -94,13 +159,13 @@ def test_using_a_move_with_no_effect_is_a_mistake() -> None:
 def test_no_effect_is_not_a_mistake_without_a_damaging_alternative() -> None:
     state = start_battle([EARTHQUAKE_ONLY], [CHARIZARD])
 
-    assert judge(choice(state, UseMove(0))) is None
+    assert judge(choice(state, UseMove(index=0))) is None
 
 
 def test_switching_into_a_guaranteed_knockout_is_a_mistake() -> None:
     state = start_battle([GARCHOMP, SLOW_PIKACHU], [EARTHQUAKE_ONLY])
 
-    mistake = judge(choice(state, Switch(1)))
+    mistake = judge(choice(state, Switch(index=1)))
 
     assert mistake is not None
     assert mistake.kind == "switched_into_ko"
@@ -109,10 +174,10 @@ def test_switching_into_a_guaranteed_knockout_is_a_mistake() -> None:
 
 def test_forced_replacements_are_not_judged() -> None:
     state = start_battle([SLOW_PIKACHU, GARCHOMP], [EARTHQUAKE_ONLY])
-    fainted = state.sides[0].with_current(replace(state.sides[0].current, hp=0))
+    fainted = state.sides[0].with_current(state.sides[0].current.model_copy(update={"hp": 0}))
     state = state.with_side(0, fainted)
 
-    assert judge(choice(state, Switch(1))) is None
+    assert judge(choice(state, Switch(index=1))) is None
 
 
 def test_recording_player_keeps_every_choice_for_review() -> None:
@@ -121,7 +186,9 @@ def test_recording_player_keeps_every_choice_for_review() -> None:
 
     action = recorder.choose(state, 0, legal_actions(state, 0))
 
-    assert action == UseMove(1)
-    assert recorder.choices == [Choice(state, 0, legal_actions(state, 0), UseMove(1))]
+    assert action == UseMove(index=1)
+    assert recorder.choices == [
+        Choice(state=state, side=0, options=legal_actions(state, 0), action=UseMove(index=1))
+    ]
     assert find_mistakes(recorder.choices) == ()
-    assert len(find_mistakes([choice(state, UseMove(0))])) == 1
+    assert len(find_mistakes([choice(state, UseMove(index=0))])) == 1

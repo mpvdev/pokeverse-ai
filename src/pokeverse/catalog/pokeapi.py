@@ -1,8 +1,4 @@
-"""HTTP client for the upstream PokéAPI (https://pokeapi.co).
-
-PokéAPI is a reference data *source*, not a runtime dependency: callers should
-read from the local catalog and use this client only to import data.
-"""
+"""HTTP client for the upstream PokéAPI (https://pokeapi.co), the catalog's source of truth."""
 
 from collections.abc import Mapping
 from importlib.metadata import version
@@ -17,6 +13,8 @@ from pokeverse.catalog.models import (
     DamageClass,
     Move,
     Pokemon,
+    PokemonEntry,
+    PokemonIndex,
     PokemonType,
     parse_identifier,
 )
@@ -107,6 +105,23 @@ def parse_move(payload: Mapping[str, Any]) -> Move:
         raise PokeApiResponseError(f"Unsupported or malformed move payload: {error}") from error
 
 
+def parse_index(payload: Mapping[str, Any]) -> PokemonIndex:
+    """Map a PokéAPI ``/pokemon?limit=&offset=`` page; ids come from each entry's URL."""
+    try:
+        return PokemonIndex(
+            count=payload["count"],
+            results=tuple(
+                PokemonEntry(
+                    pokedex_id=int(entry["url"].rstrip("/").rsplit("/", 1)[1]),
+                    name=entry["name"],
+                )
+                for entry in payload["results"]
+            ),
+        )
+    except (KeyError, TypeError, ValueError, IndexError) as error:
+        raise PokeApiResponseError(f"Malformed Pokémon index payload: {error}") from error
+
+
 class PokeApiClient:
     """Synchronous PokéAPI client.
 
@@ -143,9 +158,13 @@ class PokeApiClient:
         identifier = parse_identifier(name_or_id)
         return parse_move(self._get_json(f"/move/{identifier}"))
 
-    def _get_json(self, path: str) -> Mapping[str, Any]:
+    def fetch_index(self, limit: int, offset: int) -> PokemonIndex:
+        """Fetch one page of Pokémon names and ids (one request, no details)."""
+        return parse_index(self._get_json("/pokemon", params={"limit": limit, "offset": offset}))
+
+    def _get_json(self, path: str, params: Mapping[str, int] | None = None) -> Mapping[str, Any]:
         try:
-            response = self._client.get(path)
+            response = self._client.get(path, params=params)
         except httpx.TimeoutException as error:
             raise PokeApiUnavailableError(f"PokéAPI request timed out: {path}") from error
         except httpx.TransportError as error:

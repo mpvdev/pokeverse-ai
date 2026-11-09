@@ -11,6 +11,7 @@ from pokeverse.catalog import (
     PokemonCatalog,
     PokemonType,
     SqlitePokemonRepository,
+    StaticSource,
 )
 from pokeverse.evals.compare import (
     COMPARE_CASES,
@@ -24,13 +25,13 @@ from pokeverse.llm import Completion
 from pokeverse.teams import Team, analyze_team
 
 T = PokemonType
-STATS = BaseStats(80, 80, 80, 80, 80, 80)
-GARCHOMP = Pokemon(445, "garchomp", (T.DRAGON, T.GROUND), STATS)
-EMPOLEON = Pokemon(395, "empoleon", (T.WATER, T.STEEL), STATS)
-CORVIKNIGHT = Pokemon(823, "corviknight", (T.FLYING, T.STEEL), STATS)
-CLEFABLE = Pokemon(36, "clefable", (T.FAIRY,), STATS)
-ARCANINE = Pokemon(59, "arcanine", (T.FIRE,), STATS)
-FLYGON = Pokemon(330, "flygon", (T.GROUND, T.DRAGON), STATS)
+STATS = BaseStats(hp=80, attack=80, defense=80, special_attack=80, special_defense=80, speed=80)
+GARCHOMP = Pokemon(pokedex_id=445, name="garchomp", types=(T.DRAGON, T.GROUND), stats=STATS)
+EMPOLEON = Pokemon(pokedex_id=395, name="empoleon", types=(T.WATER, T.STEEL), stats=STATS)
+CORVIKNIGHT = Pokemon(pokedex_id=823, name="corviknight", types=(T.FLYING, T.STEEL), stats=STATS)
+CLEFABLE = Pokemon(pokedex_id=36, name="clefable", types=(T.FAIRY,), stats=STATS)
+ARCANINE = Pokemon(pokedex_id=59, name="arcanine", types=(T.FIRE,), stats=STATS)
+FLYGON = Pokemon(pokedex_id=330, name="flygon", types=(T.GROUND, T.DRAGON), stats=STATS)
 
 TEAM_CASE = CompareCase(
     "t",
@@ -42,7 +43,7 @@ TEAM_CASE = CompareCase(
     max_vulnerabilities=0,
 )
 # Empoleon (Water/Steel) takes 1/4 from Ice and resists Dragon; Clefable is immune to Dragon.
-GOOD_TEAM = Team((GARCHOMP, EMPOLEON, CLEFABLE))
+GOOD_TEAM = Team(members=(GARCHOMP, EMPOLEON, CLEFABLE))
 GOOD_ANSWER = "Garchomp takes 4× from Ice. Team: Garchomp, Empoleon, Clefable."
 
 
@@ -59,10 +60,10 @@ def test_good_team_passes() -> None:
     [
         ("Garchomp is weak to Ice.", GOOD_TEAM, "does not match"),
         (GOOD_ANSWER, None, "no team produced"),
-        (GOOD_ANSWER, Team((GARCHOMP, EMPOLEON)), "team has 2 members, expected 3"),
-        (GOOD_ANSWER, Team((CLEFABLE, EMPOLEON, ARCANINE)), "team is missing ['garchomp']"),
-        (GOOD_ANSWER, Team((GARCHOMP, CORVIKNIGHT, CLEFABLE)), "nobody resists ice"),
-        (GOOD_ANSWER, Team((GARCHOMP, FLYGON, EMPOLEON)), "vulnerabilities > 0"),
+        (GOOD_ANSWER, Team(members=(GARCHOMP, EMPOLEON)), "team has 2 members, expected 3"),
+        (GOOD_ANSWER, Team(members=(CLEFABLE, EMPOLEON, ARCANINE)), "team is missing ['garchomp']"),
+        (GOOD_ANSWER, Team(members=(GARCHOMP, CORVIKNIGHT, CLEFABLE)), "nobody resists ice"),
+        (GOOD_ANSWER, Team(members=(GARCHOMP, FLYGON, EMPOLEON)), "vulnerabilities > 0"),
         ("Garchomp takes 4× from Ice. Team: Garchomp, Clefable.", GOOD_TEAM, "empoleon"),
     ],
 )
@@ -75,7 +76,7 @@ def test_check_reports_failures(answer: str, team: Team | None, failure: str) ->
 def test_only_types() -> None:
     case = CompareCase("f", "q", team_size=2, only_types=frozenset({T.FIRE}))
 
-    failures = run_check(case, "Arcanine and Garchomp.", Team((ARCANINE, GARCHOMP)))
+    failures = run_check(case, "Arcanine and Garchomp.", Team(members=(ARCANINE, GARCHOMP)))
 
     assert failures == ("members outside the allowed types: ['garchomp']",)
 
@@ -87,24 +88,28 @@ def test_mentions_accepts_spaced_names() -> None:
 
 
 def delegation(agent: str, output: dict[str, Any] | None) -> Delegation:
-    return Delegation(agent, "task", output, None if output else "boom")
+    return Delegation(agent=agent, task="task", output=output, error=None if output else "boom")
 
 
 def test_observed_team_prefers_optimizer_output() -> None:
     completion = Completion("answer", "fake", "completed", 1, 1, 1)
     built = {"members": [{"name": "garchomp", "role": "x"}, {"name": "arcanine", "role": "y"}]}
     result = SupervisorResult(
-        "answer",
-        (
+        answer="answer",
+        delegations=(
             delegation("research", {"answer": "x"}),
             delegation("team_builder", built),
             delegation("team_optimizer", {"final_members": ["garchomp", "clefable"]}),
         ),
-        completion,
+        completion=completion,
     )
-    builder_only = SupervisorResult("a", result.delegations[:2], completion)
+    builder_only = SupervisorResult(
+        answer="a", delegations=result.delegations[:2], completion=completion
+    )
     failed_optimizer = SupervisorResult(
-        "a", (*result.delegations[:2], delegation("team_optimizer", None)), completion
+        answer="a",
+        delegations=(*result.delegations[:2], delegation("team_optimizer", None)),
+        completion=completion,
     )
 
     assert observed_team(result) == ["garchomp", "clefable"]
@@ -124,9 +129,7 @@ class ScriptedGeneralist:
 @pytest.fixture
 def catalog() -> Iterator[PokemonCatalog]:
     with SqlitePokemonRepository(":memory:") as repository:
-        for pokemon in (GARCHOMP, EMPOLEON, CLEFABLE):
-            repository.save(pokemon)
-        yield PokemonCatalog(repository)
+        yield PokemonCatalog(repository, StaticSource([GARCHOMP, EMPOLEON, CLEFABLE]))
 
 
 def test_run_case_single_agent(catalog: PokemonCatalog) -> None:
@@ -166,7 +169,9 @@ def fake_supervisor(monkeypatch: pytest.MonkeyPatch, delegations: tuple[Delegati
 
         def run(self, request: str) -> SupervisorResult:
             completion = Completion(GOOD_ANSWER, "fake", "completed", 100, 50, 5)
-            return SupervisorResult(GOOD_ANSWER, delegations, completion)
+            return SupervisorResult(
+                answer=GOOD_ANSWER, delegations=delegations, completion=completion
+            )
 
     monkeypatch.setattr(compare, "Supervisor", FakeSupervisor)
 

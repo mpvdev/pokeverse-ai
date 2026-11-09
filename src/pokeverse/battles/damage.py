@@ -2,11 +2,11 @@
 
 import math
 import random
-from dataclasses import dataclass
 
 from pokeverse.battles.stats import LEVEL, battle_stats
 from pokeverse.catalog import DamageClass, Move, Pokemon
 from pokeverse.catalog.type_chart import effectiveness
+from pokeverse.model import FrozenModel
 
 MIN_ROLL = 85
 MAX_ROLL = 100
@@ -15,8 +15,7 @@ CRITICAL_MULTIPLIER = 1.5
 STAB_MODIFIER = 6144
 
 
-@dataclass(frozen=True, slots=True)
-class DamageRoll:
+class DamageRoll(FrozenModel):
     damage: int
     roll: int
     critical: bool

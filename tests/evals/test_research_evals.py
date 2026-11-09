@@ -18,7 +18,10 @@ def result(
     tool_calls: tuple[ToolCall, ...] = (LOOKUP,),
 ) -> ResearchResult:
     completion = Completion("", "fake", "completed", 10, 5, 7, tool_calls)
-    return ResearchResult(PokedexAnswer(text, pokemon, confidence), completion)
+    return ResearchResult(
+        answer=PokedexAnswer(answer=text, pokemon=pokemon, confidence=confidence),
+        completion=completion,
+    )
 
 
 def test_correct_result_passes() -> None:

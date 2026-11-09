@@ -1,7 +1,8 @@
 """The Battle Strategy Agent: an LLM chooses battle actions from code-computed facts."""
 
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import Field, create_model
 
 from pokeverse.agents.opponent_analysis import OpponentAnalysis
 from pokeverse.agents.research import ChatModel
@@ -15,7 +16,8 @@ from pokeverse.battles import (
     expected_damage,
 )
 from pokeverse.catalog import Move
-from pokeverse.llm import Completion, LlmRequestError, OutputSchema
+from pokeverse.llm import Completion, LlmRequestError, OutputSchema, parse_reply
+from pokeverse.model import FrozenModel
 
 STRATEGY_MAX_TOKENS = 1500
 
@@ -34,8 +36,7 @@ BATTLE_STRATEGY_SYSTEM_PROMPT = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class BattleDecision:
+class BattleDecision(FrozenModel):
     turn: int
     side: int
     action: str
@@ -44,14 +45,7 @@ class BattleDecision:
     tokens: int
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "turn": self.turn,
-            "side": self.side,
-            "action": self.action,
-            "reason": self.reason,
-            "fallback": self.fallback,
-            "tokens": self.tokens,
-        }
+        return self.model_dump(mode="json")
 
 
 def option_id(state: BattleState, side: int, action: Action) -> str:
@@ -155,21 +149,13 @@ def describe_situation(state: BattleState, side: int, options: tuple[Action, ...
     return "\n".join(lines)
 
 
-def decision_schema(option_ids: list[str]) -> OutputSchema:
-    return OutputSchema(
-        name="battle_decision",
-        schema={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": option_ids},
-                "reason": {
-                    "type": "string",
-                    "description": "One sentence explaining the choice.",
-                },
-            },
-            "required": ["action", "reason"],
-            "additionalProperties": False,
-        },
+def decision_reply_model(option_ids: list[str]) -> type[FrozenModel]:
+    """The reply shape for one decision: ``action`` is an enum of exactly the legal options."""
+    return create_model(
+        "BattleDecisionReply",
+        __base__=FrozenModel,
+        action=(Literal[tuple(option_ids)], ...),
+        reason=(str, Field(description="One sentence explaining the choice.")),
     )
 
 
@@ -217,17 +203,16 @@ class BattleStrategyAgent:
             for extra in (briefing, self._lessons):
                 if extra:
                     prompt = f"{prompt}\n\n{extra}"
+            reply_model = decision_reply_model(list(by_id))
             completion = self._chat.complete(
                 prompt,
                 system=BATTLE_STRATEGY_SYSTEM_PROMPT,
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,
-                output_schema=decision_schema(list(by_id)),
+                output_schema=OutputSchema.from_model("battle_decision", reply_model),
             )
-            data = completion.data or {}
-            chosen, reason = data.get("action"), data.get("reason")
-            if chosen not in by_id or not isinstance(reason, str):
-                raise LlmRequestError(f"Invalid battle decision: {data}", completion=completion)
+            reply: Any = parse_reply(reply_model, completion, "Battle decision")
+            chosen, reason = reply.action, reply.reason
         except LlmRequestError as error:
             action = self._fallback.choose(state, side, options)
             tokens = error.completion.total_tokens if error.completion else 0
@@ -243,4 +228,8 @@ class BattleStrategyAgent:
     def _record(
         self, turn: int, side: int, action: str, reason: str, fallback: bool, tokens: int
     ) -> None:
-        self.decisions.append(BattleDecision(turn, side, action, reason, fallback, tokens))
+        self.decisions.append(
+            BattleDecision(
+                turn=turn, side=side, action=action, reason=reason, fallback=fallback, tokens=tokens
+            )
+        )

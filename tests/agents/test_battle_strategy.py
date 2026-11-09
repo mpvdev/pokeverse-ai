@@ -1,6 +1,5 @@
 import random
 from collections.abc import Callable
-from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -27,26 +26,95 @@ from pokeverse.llm import Completion, LlmRequestError, LlmUnavailableError
 T = PokemonType
 D = DamageClass
 
-EARTHQUAKE = Move(89, "earthquake", T.GROUND, D.PHYSICAL, 100, 100, 0, 10)
-DRAGON_CLAW = Move(337, "dragon-claw", T.DRAGON, D.PHYSICAL, 80, 100, 0, 15)
-THUNDERBOLT = Move(85, "thunderbolt", T.ELECTRIC, D.SPECIAL, 90, 100, 0, 15)
-QUICK_ATTACK = Move(98, "quick-attack", T.NORMAL, D.PHYSICAL, 40, 100, 1, 30)
-FLAMETHROWER = Move(53, "flamethrower", T.FIRE, D.SPECIAL, 90, 100, 0, 15)
+EARTHQUAKE = Move(
+    move_id=89,
+    name="earthquake",
+    type=T.GROUND,
+    damage_class=D.PHYSICAL,
+    power=100,
+    accuracy=100,
+    priority=0,
+    pp=10,
+)
+DRAGON_CLAW = Move(
+    move_id=337,
+    name="dragon-claw",
+    type=T.DRAGON,
+    damage_class=D.PHYSICAL,
+    power=80,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+THUNDERBOLT = Move(
+    move_id=85,
+    name="thunderbolt",
+    type=T.ELECTRIC,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+QUICK_ATTACK = Move(
+    move_id=98,
+    name="quick-attack",
+    type=T.NORMAL,
+    damage_class=D.PHYSICAL,
+    power=40,
+    accuracy=100,
+    priority=1,
+    pp=30,
+)
+FLAMETHROWER = Move(
+    move_id=53,
+    name="flamethrower",
+    type=T.FIRE,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
 
 LEARNSET = frozenset(
     move.name for move in (EARTHQUAKE, DRAGON_CLAW, THUNDERBOLT, QUICK_ATTACK, FLAMETHROWER)
 )
 GARCHOMP = Battler(
-    Pokemon(445, "garchomp", (T.DRAGON, T.GROUND), BaseStats(108, 130, 95, 80, 85, 102), LEARNSET),
-    (EARTHQUAKE, DRAGON_CLAW),
+    pokemon=Pokemon(
+        pokedex_id=445,
+        name="garchomp",
+        types=(T.DRAGON, T.GROUND),
+        stats=BaseStats(
+            hp=108, attack=130, defense=95, special_attack=80, special_defense=85, speed=102
+        ),
+        learnset=LEARNSET,
+    ),
+    moves=(EARTHQUAKE, DRAGON_CLAW),
 )
 PIKACHU = Battler(
-    Pokemon(25, "pikachu", (T.ELECTRIC,), BaseStats(35, 55, 40, 50, 50, 90), LEARNSET),
-    (THUNDERBOLT, QUICK_ATTACK),
+    pokemon=Pokemon(
+        pokedex_id=25,
+        name="pikachu",
+        types=(T.ELECTRIC,),
+        stats=BaseStats(
+            hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=90
+        ),
+        learnset=LEARNSET,
+    ),
+    moves=(THUNDERBOLT, QUICK_ATTACK),
 )
 CHARIZARD = Battler(
-    Pokemon(6, "charizard", (T.FIRE, T.FLYING), BaseStats(78, 84, 78, 109, 85, 100), LEARNSET),
-    (FLAMETHROWER,),
+    pokemon=Pokemon(
+        pokedex_id=6,
+        name="charizard",
+        types=(T.FIRE, T.FLYING),
+        stats=BaseStats(
+            hp=78, attack=84, defense=78, special_attack=109, special_defense=85, speed=100
+        ),
+        learnset=LEARNSET,
+    ),
+    moves=(FLAMETHROWER,),
 )
 
 
@@ -105,7 +173,7 @@ def test_situation_flags_knockouts() -> None:
 
 def faint_active(state: BattleState, side: int) -> BattleState:
     own = state.sides[side]
-    return state.with_side(side, own.with_current(replace(own.current, hp=0)))
+    return state.with_side(side, own.with_current(own.current.model_copy(update={"hp": 0})))
 
 
 def test_replacement_situation_says_the_newcomer_is_not_attacked() -> None:
@@ -125,7 +193,7 @@ def test_agent_uses_the_models_choice_with_a_per_turn_enum_schema() -> None:
 
     action = agent.choose(state, 0, legal_actions(state, 0))
 
-    assert action == UseMove(1)
+    assert action == UseMove(index=1)
     (call,) = chat.calls
     assert call["system"] == BATTLE_STRATEGY_SYSTEM_PROMPT
     schema = call["output_schema"].schema
@@ -149,7 +217,7 @@ def test_a_single_legal_option_needs_no_model_call() -> None:
     agent = BattleStrategyAgent(chat)
     state = start_battle([CHARIZARD], [GARCHOMP])
 
-    assert agent.choose(state, 0, legal_actions(state, 0)) == UseMove(0)
+    assert agent.choose(state, 0, legal_actions(state, 0)) == UseMove(index=0)
     assert chat.calls == []
     assert agent.decisions[0].reason == "Only legal option."
 
@@ -198,5 +266,5 @@ def test_forced_replacement_decision_is_recorded_on_the_current_turn() -> None:
     agent = BattleStrategyAgent(ScriptedChat(pick=lambda ids: ids[-1]))
     state = faint_active(start_battle([GARCHOMP], [PIKACHU, CHARIZARD, GARCHOMP]), 1)
 
-    assert agent.choose(state, 1, legal_actions(state, 1)) == Switch(2)
+    assert agent.choose(state, 1, legal_actions(state, 1)) == Switch(index=2)
     assert agent.decisions[0].turn == state.turn

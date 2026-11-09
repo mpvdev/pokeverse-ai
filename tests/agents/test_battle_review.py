@@ -7,8 +7,22 @@ from pokeverse.catalog import BaseStats, DamageClass, Move, Pokemon, PokemonType
 from pokeverse.llm import Completion
 
 MISTAKES = (
-    Mistake(3, 0, "no_effect", "Earthquake", "Dragon Claw", "Earthquake has no effect."),
-    Mistake(5, 0, "missed_ko", "Outrage", "Volt Tackle", "Volt Tackle was a guaranteed KO."),
+    Mistake(
+        turn=3,
+        side=0,
+        kind="no_effect",
+        chosen="Earthquake",
+        better="Dragon Claw",
+        detail="Earthquake has no effect.",
+    ),
+    Mistake(
+        turn=5,
+        side=0,
+        kind="missed_ko",
+        chosen="Outrage",
+        better="Volt Tackle",
+        detail="Volt Tackle was a guaranteed KO.",
+    ),
 )
 
 
@@ -79,16 +93,36 @@ def test_only_cited_lessons_are_kept_and_at_most_three() -> None:
 
 def test_strategy_agent_appends_lessons_to_every_prompt() -> None:
     T, D = PokemonType, DamageClass
-    earthquake = Move(89, "earthquake", T.GROUND, D.PHYSICAL, 100, 100, 0, 10)
-    claw = Move(337, "dragon-claw", T.DRAGON, D.PHYSICAL, 80, 100, 0, 15)
-    species = Pokemon(
-        445,
-        "garchomp",
-        (T.DRAGON, T.GROUND),
-        BaseStats(108, 130, 95, 80, 85, 102),
-        frozenset({"earthquake", "dragon-claw"}),
+    earthquake = Move(
+        move_id=89,
+        name="earthquake",
+        type=T.GROUND,
+        damage_class=D.PHYSICAL,
+        power=100,
+        accuracy=100,
+        priority=0,
+        pp=10,
     )
-    garchomp = Battler(species, (earthquake, claw))
+    claw = Move(
+        move_id=337,
+        name="dragon-claw",
+        type=T.DRAGON,
+        damage_class=D.PHYSICAL,
+        power=80,
+        accuracy=100,
+        priority=0,
+        pp=15,
+    )
+    species = Pokemon(
+        pokedex_id=445,
+        name="garchomp",
+        types=(T.DRAGON, T.GROUND),
+        stats=BaseStats(
+            hp=108, attack=130, defense=95, special_attack=80, special_defense=85, speed=102
+        ),
+        learnset=frozenset({"earthquake", "dragon-claw"}),
+    )
+    garchomp = Battler(pokemon=species, moves=(earthquake, claw))
 
     class Recorder:
         prompts: list[str] = []

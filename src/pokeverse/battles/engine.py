@@ -2,13 +2,13 @@
 
 import random
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol
 
 from pokeverse.battles.battler import Battler
 from pokeverse.battles.damage import roll_damage
 from pokeverse.battles.stats import battle_stats
 from pokeverse.catalog.type_chart import effectiveness
+from pokeverse.model import FrozenModel
 from pokeverse.teams import MAX_TEAM_SIZE
 
 MAX_TURNS = 100
@@ -20,21 +20,18 @@ class IllegalActionError(ValueError):
     """A player chose an action that is not legal in the current state."""
 
 
-@dataclass(frozen=True, slots=True)
-class UseMove:
+class UseMove(FrozenModel):
     index: int
 
 
-@dataclass(frozen=True, slots=True)
-class Switch:
+class Switch(FrozenModel):
     index: int
 
 
 type Action = UseMove | Switch
 
 
-@dataclass(frozen=True, slots=True)
-class Combatant:
+class Combatant(FrozenModel):
     battler: Battler
     hp: int
     max_hp: int
@@ -42,7 +39,7 @@ class Combatant:
     @classmethod
     def enter(cls, battler: Battler) -> Combatant:
         max_hp = battle_stats(battler.pokemon.stats).hp
-        return cls(battler, max_hp, max_hp)
+        return cls(battler=battler, hp=max_hp, max_hp=max_hp)
 
     @property
     def name(self) -> str:
@@ -57,8 +54,7 @@ class Combatant:
         return self.hp == 0
 
 
-@dataclass(frozen=True, slots=True)
-class Side:
+class Side(FrozenModel):
     team: tuple[Combatant, ...]
     active: int = 0
 
@@ -80,11 +76,10 @@ class Side:
     def with_current(self, combatant: Combatant) -> Side:
         team = list(self.team)
         team[self.active] = combatant
-        return replace(self, team=tuple(team))
+        return self.model_copy(update={"team": tuple(team)})
 
 
-@dataclass(frozen=True, slots=True)
-class BattleState:
+class BattleState(FrozenModel):
     sides: tuple[Side, Side]
     turn: int = 0
 
@@ -107,11 +102,10 @@ class BattleState:
     def with_side(self, index: int, side: Side) -> BattleState:
         sides = list(self.sides)
         sides[index] = side
-        return replace(self, sides=(sides[0], sides[1]))
+        return self.model_copy(update={"sides": (sides[0], sides[1])})
 
 
-@dataclass(frozen=True, slots=True)
-class BattleEvent:
+class BattleEvent(FrozenModel):
     turn: int
     kind: EventKind
     side: int | None = None
@@ -173,8 +167,7 @@ class Player(Protocol):
     def choose(self, state: BattleState, side: int, options: tuple[Action, ...]) -> Action: ...
 
 
-@dataclass(frozen=True, slots=True)
-class BattleResult:
+class BattleResult(FrozenModel):
     state: BattleState
     events: tuple[BattleEvent, ...]
 
@@ -192,8 +185,8 @@ def start_battle(team_a: Sequence[Battler], team_b: Sequence[Battler]) -> Battle
     for team in (team_a, team_b):
         if not 1 <= len(team) <= MAX_TEAM_SIZE:
             raise ValueError(f"a battle team must have between 1 and {MAX_TEAM_SIZE} battlers")
-        sides.append(Side(tuple(Combatant.enter(battler) for battler in team)))
-    return BattleState((sides[0], sides[1]))
+        sides.append(Side(team=tuple(Combatant.enter(battler) for battler in team)))
+    return BattleState(sides=(sides[0], sides[1]))
 
 
 def legal_actions(state: BattleState, side: int) -> tuple[Action, ...]:
@@ -201,10 +194,10 @@ def legal_actions(state: BattleState, side: int) -> tuple[Action, ...]:
     if state.over:
         return ()
     own = state.sides[side]
-    switches = tuple(Switch(index) for index in own.bench())
+    switches = tuple(Switch(index=index) for index in own.bench())
     if own.current.fainted:
         return switches
-    moves = tuple(UseMove(index) for index in range(len(own.current.battler.moves)))
+    moves = tuple(UseMove(index=index) for index in range(len(own.current.battler.moves)))
     return moves + switches
 
 
@@ -227,8 +220,10 @@ def _order(state: BattleState, actions: tuple[Action, Action], rng: random.Rando
 
 
 def _switch(state: BattleState, side: int, index: int) -> tuple[BattleState, BattleEvent]:
-    new_state = state.with_side(side, replace(state.sides[side], active=index))
-    event = BattleEvent(new_state.turn, "switch", side, new_state.sides[side].current.name)
+    new_state = state.with_side(side, state.sides[side].model_copy(update={"active": index}))
+    event = BattleEvent(
+        turn=new_state.turn, kind="switch", side=side, pokemon=new_state.sides[side].current.name
+    )
     return new_state, event
 
 
@@ -239,26 +234,40 @@ def _attack(
     target_side = 1 - side
     defender = state.sides[target_side].current
     move = attacker.battler.moves[move_index]
-    events = [BattleEvent(state.turn, "move", side, attacker.name, move.name)]
+    events = [
+        BattleEvent(turn=state.turn, kind="move", side=side, pokemon=attacker.name, move=move.name)
+    ]
 
     if effectiveness(move.type, defender.battler.pokemon.types) == 0:
-        events.append(BattleEvent(state.turn, "no_effect", target_side, defender.name, move.name))
+        events.append(
+            BattleEvent(
+                turn=state.turn,
+                kind="no_effect",
+                side=target_side,
+                pokemon=defender.name,
+                move=move.name,
+            )
+        )
         return state, events
     if move.accuracy is not None and rng.randint(1, 100) > move.accuracy:
-        events.append(BattleEvent(state.turn, "miss", side, attacker.name, move.name))
+        events.append(
+            BattleEvent(
+                turn=state.turn, kind="miss", side=side, pokemon=attacker.name, move=move.name
+            )
+        )
         return state, events
 
     hit = roll_damage(attacker.battler.pokemon, defender.battler.pokemon, move, rng)
     damage = min(hit.damage, defender.hp)
-    hurt = replace(defender, hp=defender.hp - damage)
+    hurt = defender.model_copy(update={"hp": defender.hp - damage})
     state = state.with_side(target_side, state.sides[target_side].with_current(hurt))
     events.append(
         BattleEvent(
-            state.turn,
-            "damage",
-            target_side,
-            hurt.name,
-            move.name,
+            turn=state.turn,
+            kind="damage",
+            side=target_side,
+            pokemon=hurt.name,
+            move=move.name,
             damage=damage,
             hp=hurt.hp,
             critical=hit.critical,
@@ -266,14 +275,16 @@ def _attack(
         )
     )
     if hurt.fainted:
-        events.append(BattleEvent(state.turn, "faint", target_side, hurt.name))
+        events.append(
+            BattleEvent(turn=state.turn, kind="faint", side=target_side, pokemon=hurt.name)
+        )
     return state, events
 
 
 def _ending(state: BattleState) -> list[BattleEvent]:
     if state.winner is None:
         return []
-    return [BattleEvent(state.turn, "win", state.winner)]
+    return [BattleEvent(turn=state.turn, kind="win", side=state.winner)]
 
 
 def play_turn(
@@ -287,7 +298,7 @@ def play_turn(
     for side, action in enumerate(actions):
         _check(state, side, action)
 
-    state = replace(state, turn=state.turn + 1)
+    state = state.model_copy(update={"turn": state.turn + 1})
     events: list[BattleEvent] = []
     for side in _order(state, actions, rng):
         action = actions[side]
@@ -322,7 +333,10 @@ def run_battle(
 ) -> BattleResult:
     """Play until one side has no battlers left, or declare a draw after ``max_turns``."""
     state = start_battle(team_a, team_b)
-    events = [BattleEvent(0, "switch", side, state.sides[side].current.name) for side in (0, 1)]
+    events = [
+        BattleEvent(turn=0, kind="switch", side=side, pokemon=state.sides[side].current.name)
+        for side in (0, 1)
+    ]
     while not state.over and state.turn < max_turns:
         actions = (
             players[0].choose(state, 0, legal_actions(state, 0)),
@@ -336,5 +350,5 @@ def run_battle(
                 state, new_events = replace_fainted(state, side, choice)
                 events.extend(new_events)
     if not state.over:
-        events.append(BattleEvent(state.turn, "draw"))
-    return BattleResult(state, tuple(events))
+        events.append(BattleEvent(turn=state.turn, kind="draw"))
+    return BattleResult(state=state, events=tuple(events))

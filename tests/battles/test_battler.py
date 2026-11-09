@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 
 from pokeverse.battles import Battler, load_battler
 from pokeverse.catalog import (
@@ -18,22 +19,103 @@ from pokeverse.catalog.pokeapi import PokemonNotFoundError
 T = PokemonType
 D = DamageClass
 
-THUNDERBOLT = Move(85, "thunderbolt", T.ELECTRIC, D.SPECIAL, 90, 100, 0, 15)
-QUICK_ATTACK = Move(98, "quick-attack", T.NORMAL, D.PHYSICAL, 40, 100, 1, 30)
-IRON_TAIL = Move(231, "iron-tail", T.STEEL, D.PHYSICAL, 100, 75, 0, 15)
-SURF = Move(57, "surf", T.WATER, D.SPECIAL, 90, 100, 0, 15)
-VOLT_TACKLE = Move(344, "volt-tackle", T.ELECTRIC, D.PHYSICAL, 120, 100, 0, 15)
-THUNDER_WAVE = Move(86, "thunder-wave", T.ELECTRIC, D.STATUS, None, 90, 0, 20)
-SEISMIC_TOSS = Move(69, "seismic-toss", T.FIGHTING, D.PHYSICAL, None, 100, 0, 20)
-FLAMETHROWER = Move(53, "flamethrower", T.FIRE, D.SPECIAL, 90, 100, 0, 15)
-HYPER_BEAM = Move(63, "hyper-beam", T.NORMAL, D.SPECIAL, 150, 90, 0, 5)
+THUNDERBOLT = Move(
+    move_id=85,
+    name="thunderbolt",
+    type=T.ELECTRIC,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+QUICK_ATTACK = Move(
+    move_id=98,
+    name="quick-attack",
+    type=T.NORMAL,
+    damage_class=D.PHYSICAL,
+    power=40,
+    accuracy=100,
+    priority=1,
+    pp=30,
+)
+IRON_TAIL = Move(
+    move_id=231,
+    name="iron-tail",
+    type=T.STEEL,
+    damage_class=D.PHYSICAL,
+    power=100,
+    accuracy=75,
+    priority=0,
+    pp=15,
+)
+SURF = Move(
+    move_id=57,
+    name="surf",
+    type=T.WATER,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+VOLT_TACKLE = Move(
+    move_id=344,
+    name="volt-tackle",
+    type=T.ELECTRIC,
+    damage_class=D.PHYSICAL,
+    power=120,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+THUNDER_WAVE = Move(
+    move_id=86,
+    name="thunder-wave",
+    type=T.ELECTRIC,
+    damage_class=D.STATUS,
+    power=None,
+    accuracy=90,
+    priority=0,
+    pp=20,
+)
+SEISMIC_TOSS = Move(
+    move_id=69,
+    name="seismic-toss",
+    type=T.FIGHTING,
+    damage_class=D.PHYSICAL,
+    power=None,
+    accuracy=100,
+    priority=0,
+    pp=20,
+)
+FLAMETHROWER = Move(
+    move_id=53,
+    name="flamethrower",
+    type=T.FIRE,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+HYPER_BEAM = Move(
+    move_id=63,
+    name="hyper-beam",
+    type=T.NORMAL,
+    damage_class=D.SPECIAL,
+    power=150,
+    accuracy=90,
+    priority=0,
+    pp=5,
+)
 
 PIKACHU = Pokemon(
-    25,
-    "pikachu",
-    (T.ELECTRIC,),
-    BaseStats(35, 55, 40, 50, 50, 90),
-    frozenset(
+    pokedex_id=25,
+    name="pikachu",
+    types=(T.ELECTRIC,),
+    stats=BaseStats(hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=90),
+    learnset=frozenset(
         {
             "thunderbolt",
             "quick-attack",
@@ -49,7 +131,7 @@ PIKACHU = Pokemon(
 
 
 def test_battler_with_four_moves() -> None:
-    battler = Battler(PIKACHU, (THUNDERBOLT, QUICK_ATTACK, IRON_TAIL, SURF))
+    battler = Battler(pokemon=PIKACHU, moves=(THUNDERBOLT, QUICK_ATTACK, IRON_TAIL, SURF))
 
     assert [move.name for move in battler.moves] == [
         "thunderbolt",
@@ -66,8 +148,6 @@ def test_battler_with_four_moves() -> None:
     [
         ((), "between 1 and 4"),
         ((THUNDERBOLT, QUICK_ATTACK, IRON_TAIL, SURF, VOLT_TACKLE), "between 1 and 4"),
-        ([THUNDERBOLT], "tuple of Move"),
-        (("thunderbolt",), "tuple of Move"),
         ((THUNDERBOLT, THUNDERBOLT), "duplicates"),
         ((THUNDERBOLT, FLAMETHROWER), "pikachu cannot learn: flamethrower"),
         ((THUNDER_WAVE,), "not supported in battle: thunder-wave"),
@@ -77,12 +157,20 @@ def test_battler_with_four_moves() -> None:
 )
 def test_invalid_battler_is_rejected(moves: Any, message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        Battler(PIKACHU, moves)
+        Battler(pokemon=PIKACHU, moves=moves)
+
+
+@pytest.mark.parametrize("moves", [[THUNDERBOLT], ("thunderbolt",)])
+def test_moves_must_be_a_tuple_of_moves(moves: Any) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        Battler(pokemon=PIKACHU, moves=moves)
+
+    assert excinfo.value.errors()[0]["loc"][0] == "moves"
 
 
 def test_pokemon_must_be_a_pokemon() -> None:
     with pytest.raises(ValueError, match="Pokemon"):
-        Battler(cast(Any, "pikachu"), (THUNDERBOLT,))
+        Battler(pokemon=cast(Any, "pikachu"), moves=(THUNDERBOLT,))
 
 
 class FakeSource:

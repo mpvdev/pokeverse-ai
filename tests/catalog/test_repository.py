@@ -14,18 +14,45 @@ from pokeverse.catalog import (
 )
 from pokeverse.catalog.repository import SCHEMA_VERSION, CatalogSchemaError
 
-PIKACHU_STATS = BaseStats(35, 55, 40, 50, 50, 90)
-CHARIZARD_STATS = BaseStats(78, 84, 78, 109, 85, 100)
-PIKACHU = Pokemon(
-    25,
-    "pikachu",
-    (PokemonType.ELECTRIC,),
-    PIKACHU_STATS,
-    frozenset({"thunderbolt", "quick-attack", "surf"}),
+PIKACHU_STATS = BaseStats(
+    hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=90
 )
-CHARIZARD = Pokemon(6, "charizard", (PokemonType.FIRE, PokemonType.FLYING), CHARIZARD_STATS)
-THUNDERBOLT = Move(85, "thunderbolt", PokemonType.ELECTRIC, DamageClass.SPECIAL, 90, 100, 0, 15)
-SWORDS_DANCE = Move(14, "swords-dance", PokemonType.NORMAL, DamageClass.STATUS, None, None, 0, 20)
+CHARIZARD_STATS = BaseStats(
+    hp=78, attack=84, defense=78, special_attack=109, special_defense=85, speed=100
+)
+PIKACHU = Pokemon(
+    pokedex_id=25,
+    name="pikachu",
+    types=(PokemonType.ELECTRIC,),
+    stats=PIKACHU_STATS,
+    learnset=frozenset({"thunderbolt", "quick-attack", "surf"}),
+)
+CHARIZARD = Pokemon(
+    pokedex_id=6,
+    name="charizard",
+    types=(PokemonType.FIRE, PokemonType.FLYING),
+    stats=CHARIZARD_STATS,
+)
+THUNDERBOLT = Move(
+    move_id=85,
+    name="thunderbolt",
+    type=PokemonType.ELECTRIC,
+    damage_class=DamageClass.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+SWORDS_DANCE = Move(
+    move_id=14,
+    name="swords-dance",
+    type=PokemonType.NORMAL,
+    damage_class=DamageClass.STATUS,
+    power=None,
+    accuracy=None,
+    priority=0,
+    pp=20,
+)
 
 V1_SCHEMA = """
 CREATE TABLE pokemon (
@@ -88,7 +115,10 @@ def test_save_and_get_round_trip(repository: SqlitePokemonRepository) -> None:
 
 def test_type_order_is_preserved(repository: SqlitePokemonRepository) -> None:
     reversed_types = Pokemon(
-        6, "charizard", (PokemonType.FLYING, PokemonType.FIRE), CHARIZARD_STATS
+        pokedex_id=6,
+        name="charizard",
+        types=(PokemonType.FLYING, PokemonType.FIRE),
+        stats=CHARIZARD_STATS,
     )
     repository.save(reversed_types)
 
@@ -99,7 +129,12 @@ def test_save_is_idempotent_and_updates(repository: SqlitePokemonRepository) -> 
     repository.save(PIKACHU)
     repository.save(PIKACHU)
     updated = Pokemon(
-        25, "pikachu", (PokemonType.ELECTRIC, PokemonType.FAIRY), BaseStats(35, 55, 40, 50, 50, 95)
+        pokedex_id=25,
+        name="pikachu",
+        types=(PokemonType.ELECTRIC, PokemonType.FAIRY),
+        stats=BaseStats(
+            hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=95
+        ),
     )
     repository.save(updated)
 
@@ -119,7 +154,11 @@ def test_name_must_be_unique(repository: SqlitePokemonRepository) -> None:
     repository.save(PIKACHU)
 
     with pytest.raises(sqlite3.IntegrityError):
-        repository.save(Pokemon(26, "pikachu", (PokemonType.ELECTRIC,), PIKACHU_STATS))
+        repository.save(
+            Pokemon(
+                pokedex_id=26, name="pikachu", types=(PokemonType.ELECTRIC,), stats=PIKACHU_STATS
+            )
+        )
     assert repository.get_by_id(26) is None
 
 
@@ -220,7 +259,16 @@ def test_move_round_trip(repository: SqlitePokemonRepository) -> None:
 
 def test_save_move_updates(repository: SqlitePokemonRepository) -> None:
     repository.save_move(THUNDERBOLT)
-    changed = Move(85, "thunderbolt", PokemonType.ELECTRIC, DamageClass.SPECIAL, 95, 100, 0, 15)
+    changed = Move(
+        move_id=85,
+        name="thunderbolt",
+        type=PokemonType.ELECTRIC,
+        damage_class=DamageClass.SPECIAL,
+        power=95,
+        accuracy=100,
+        priority=0,
+        pp=15,
+    )
     repository.save_move(changed)
 
     assert repository.get_move_by_id(85) == changed

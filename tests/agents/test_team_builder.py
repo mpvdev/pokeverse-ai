@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -15,15 +16,16 @@ from pokeverse.catalog import (
     PokemonCatalog,
     PokemonType,
     SqlitePokemonRepository,
+    StaticSource,
 )
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.llm import Completion, LlmRequestError, LlmSettings, OpenAIChat, ToolCall
 
 T = PokemonType
-STATS = BaseStats(80, 80, 80, 80, 80, 80)
-PIKACHU = Pokemon(25, "pikachu", (T.ELECTRIC,), STATS)
-CHARIZARD = Pokemon(6, "charizard", (T.FIRE, T.FLYING), STATS)
-BLASTOISE = Pokemon(9, "blastoise", (T.WATER,), STATS)
+STATS = BaseStats(hp=80, attack=80, defense=80, special_attack=80, special_defense=80, speed=80)
+PIKACHU = Pokemon(pokedex_id=25, name="pikachu", types=(T.ELECTRIC,), stats=STATS)
+CHARIZARD = Pokemon(pokedex_id=6, name="charizard", types=(T.FIRE, T.FLYING), stats=STATS)
+BLASTOISE = Pokemon(pokedex_id=9, name="blastoise", types=(T.WATER,), stats=STATS)
 
 
 class ScriptedChat:
@@ -39,9 +41,7 @@ class ScriptedChat:
 @pytest.fixture
 def catalog() -> Iterator[PokemonCatalog]:
     with SqlitePokemonRepository(":memory:") as repository:
-        for pokemon in (PIKACHU, CHARIZARD, BLASTOISE):
-            repository.save(pokemon)
-        yield PokemonCatalog(repository)
+        yield PokemonCatalog(repository, StaticSource([PIKACHU, CHARIZARD, BLASTOISE]))
 
 
 def proposal(*names: str) -> dict[str, Any]:
@@ -129,7 +129,7 @@ def test_invalid_proposals_are_rejected(catalog: PokemonCatalog, data: dict[str,
 def test_proposal_round_trips() -> None:
     data = proposal("pikachu", "pikachu")
 
-    assert TeamProposal.from_dict(data).to_dict() == data
+    assert TeamProposal.model_validate_json(json.dumps(data)).to_dict() == data
 
 
 def test_schema_is_strict_mode_compatible() -> None:

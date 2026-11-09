@@ -11,19 +11,20 @@ from pokeverse.catalog import (
     PokemonCatalog,
     PokemonType,
     SqlitePokemonRepository,
+    StaticSource,
 )
 from pokeverse.llm import Completion, LlmRequestError
 from pokeverse.teams import Team
 
 T = PokemonType
-STATS = BaseStats(80, 80, 80, 80, 80, 80)
-RESHIRAM = Pokemon(643, "reshiram", (T.DRAGON, T.FIRE), STATS)
-TURTONATOR = Pokemon(776, "turtonator", (T.FIRE, T.DRAGON), STATS)
-GOUGING_FIRE = Pokemon(1020, "gouging-fire", (T.FIRE, T.DRAGON), STATS)
-VOLCANION = Pokemon(721, "volcanion", (T.FIRE, T.WATER), STATS)
-ARCANINE = Pokemon(59, "arcanine", (T.FIRE,), STATS)
-CORVIKNIGHT = Pokemon(823, "corviknight", (T.FLYING, T.STEEL), STATS)
-FIRE_TEAM = Team((RESHIRAM, TURTONATOR, GOUGING_FIRE, VOLCANION))
+STATS = BaseStats(hp=80, attack=80, defense=80, special_attack=80, special_defense=80, speed=80)
+RESHIRAM = Pokemon(pokedex_id=643, name="reshiram", types=(T.DRAGON, T.FIRE), stats=STATS)
+TURTONATOR = Pokemon(pokedex_id=776, name="turtonator", types=(T.FIRE, T.DRAGON), stats=STATS)
+GOUGING_FIRE = Pokemon(pokedex_id=1020, name="gouging-fire", types=(T.FIRE, T.DRAGON), stats=STATS)
+VOLCANION = Pokemon(pokedex_id=721, name="volcanion", types=(T.FIRE, T.WATER), stats=STATS)
+ARCANINE = Pokemon(pokedex_id=59, name="arcanine", types=(T.FIRE,), stats=STATS)
+CORVIKNIGHT = Pokemon(pokedex_id=823, name="corviknight", types=(T.FLYING, T.STEEL), stats=STATS)
+FIRE_TEAM = Team(members=(RESHIRAM, TURTONATOR, GOUGING_FIRE, VOLCANION))
 
 
 class ScriptedChat:
@@ -39,9 +40,10 @@ class ScriptedChat:
 @pytest.fixture
 def catalog() -> Iterator[PokemonCatalog]:
     with SqlitePokemonRepository(":memory:") as repository:
-        for pokemon in (RESHIRAM, TURTONATOR, GOUGING_FIRE, VOLCANION, ARCANINE, CORVIKNIGHT):
-            repository.save(pokemon)
-        yield PokemonCatalog(repository)
+        source = StaticSource(
+            [RESHIRAM, TURTONATOR, GOUGING_FIRE, VOLCANION, ARCANINE, CORVIKNIGHT]
+        )
+        yield PokemonCatalog(repository, source)
 
 
 def reply(swaps: list[tuple[str, str]] = (), claims: list[tuple[str, str, str]] = ()) -> dict:
@@ -126,7 +128,7 @@ def test_swaps_apply_in_sequence(catalog: PokemonCatalog) -> None:
 
 
 def test_claims_are_checked_against_the_type_chart(catalog: PokemonCatalog) -> None:
-    team = Team((CORVIKNIGHT,))
+    team = Team(members=(CORVIKNIGHT,))
     claims = [
         ("corviknight", "ice", "resists"),
         ("corviknight", "ground", "immune"),

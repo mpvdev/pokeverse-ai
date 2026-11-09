@@ -5,7 +5,12 @@ from pokeverse.agents.battle_review import BattleReview, BattleReviewAgent, Less
 from pokeverse.agents.battle_strategy import BattleDecision, BattleStrategyAgent
 from pokeverse.agents.opponent_analysis import OpponentAnalysis, OpponentAnalysisAgent
 from pokeverse.agents.optimizer import OptimizationResult, TeamOptimizationAgent
-from pokeverse.agents.research import RESEARCH_SYSTEM_PROMPT, ResearchAgent, ResearchResult
+from pokeverse.agents.research import (
+    RESEARCH_SYSTEM_PROMPT,
+    ChatModel,
+    ResearchAgent,
+    ResearchResult,
+)
 from pokeverse.agents.supervisor import Delegation, Supervisor, SupervisorResult
 from pokeverse.agents.team_builder import (
     TEAM_PROPOSAL_SCHEMA,
@@ -27,6 +32,7 @@ __all__ = [
     "BattleReview",
     "BattleReviewAgent",
     "BattleStrategyAgent",
+    "ChatModel",
     "Confidence",
     "Delegation",
     "Lesson",

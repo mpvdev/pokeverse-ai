@@ -4,6 +4,7 @@ import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from pokeverse.agents.research import ResearchAgent, ResearchResult
 from pokeverse.catalog import PokemonType
@@ -98,6 +99,17 @@ class EvalResult:
         return self.result is not None and (
             bool(self.result.completion.tool_calls) == self.case.expect_lookup
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "case": self.case.id,
+            "passed": self.passed,
+            "tool_use_correct": self.tool_use_correct,
+            "failures": list(self.failures),
+            "latency_ms": self.latency_ms,
+            "tokens": self.result.completion.total_tokens if self.result else 0,
+            "answer": self.result.to_dict() if self.result else None,
+        }
 
 
 def check(case: EvalCase, result: ResearchResult) -> tuple[str, ...]:

@@ -6,7 +6,15 @@ from typing import Any
 import httpx
 import pytest
 
-from pokeverse.catalog import BaseStats, DamageClass, Move, Pokemon, PokemonType
+from pokeverse.catalog import (
+    BaseStats,
+    DamageClass,
+    Move,
+    Pokemon,
+    PokemonEntry,
+    PokemonIndex,
+    PokemonType,
+)
 from pokeverse.catalog.pokeapi import (
     DEFAULT_BASE_URL,
     PokeApiClient,
@@ -15,6 +23,7 @@ from pokeverse.catalog.pokeapi import (
     PokeApiResponseError,
     PokeApiUnavailableError,
     PokemonNotFoundError,
+    parse_index,
     parse_move,
     parse_pokemon,
 )
@@ -22,23 +31,45 @@ from pokeverse.catalog.pokeapi import (
 FIXTURES = Path(__file__).parent / "fixtures" / "pokeapi"
 
 PIKACHU = Pokemon(
-    25,
-    "pikachu",
-    (PokemonType.ELECTRIC,),
-    BaseStats(35, 55, 40, 50, 50, 90),
-    frozenset({"thunderbolt", "quick-attack", "iron-tail", "thunder-wave", "surf", "volt-tackle"}),
+    pokedex_id=25,
+    name="pikachu",
+    types=(PokemonType.ELECTRIC,),
+    stats=BaseStats(hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=90),
+    learnset=frozenset(
+        {"thunderbolt", "quick-attack", "iron-tail", "thunder-wave", "surf", "volt-tackle"}
+    ),
 )
 CHARIZARD = Pokemon(
-    6,
-    "charizard",
-    (PokemonType.FIRE, PokemonType.FLYING),
-    BaseStats(78, 84, 78, 109, 85, 100),
-    frozenset(
+    pokedex_id=6,
+    name="charizard",
+    types=(PokemonType.FIRE, PokemonType.FLYING),
+    stats=BaseStats(
+        hp=78, attack=84, defense=78, special_attack=109, special_defense=85, speed=100
+    ),
+    learnset=frozenset(
         {"flamethrower", "air-slash", "dragon-claw", "earthquake", "swords-dance", "fire-fang"}
     ),
 )
-THUNDERBOLT = Move(85, "thunderbolt", PokemonType.ELECTRIC, DamageClass.SPECIAL, 90, 100, 0, 15)
-SWORDS_DANCE = Move(14, "swords-dance", PokemonType.NORMAL, DamageClass.STATUS, None, None, 0, 20)
+THUNDERBOLT = Move(
+    move_id=85,
+    name="thunderbolt",
+    type=PokemonType.ELECTRIC,
+    damage_class=DamageClass.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+SWORDS_DANCE = Move(
+    move_id=14,
+    name="swords-dance",
+    type=PokemonType.NORMAL,
+    damage_class=DamageClass.STATUS,
+    power=None,
+    accuracy=None,
+    priority=0,
+    pp=20,
+)
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -239,6 +270,53 @@ def test_fetch_move_by_name_or_id(identifier: str | int) -> None:
 def test_unknown_move_raises_not_found() -> None:
     with make_client(fixture_handler) as client, pytest.raises(PokemonNotFoundError):
         client.fetch_move("splashier")
+
+
+INDEX_PAGE = {
+    "count": 1350,
+    "next": "https://pokeapi.co/api/v2/pokemon?offset=2&limit=2",
+    "previous": None,
+    "results": [
+        {"name": "bulbasaur", "url": "https://pokeapi.co/api/v2/pokemon/1/"},
+        {"name": "charizard-mega-x", "url": "https://pokeapi.co/api/v2/pokemon/10034/"},
+    ],
+}
+
+
+def test_fetch_index_sends_paging_and_parses_ids_from_urls() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=INDEX_PAGE)
+
+    with make_client(handler) as client:
+        page = client.fetch_index(2, 0)
+
+    assert str(seen[0].url) == f"{DEFAULT_BASE_URL}/pokemon?limit=2&offset=0"
+    assert page == PokemonIndex(
+        count=1350,
+        results=(
+            PokemonEntry(pokedex_id=1, name="bulbasaur"),
+            PokemonEntry(pokedex_id=10034, name="charizard-mega-x"),
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("count"),
+        lambda p: p["results"][0].update(url="https://pokeapi.co/api/v2/pokemon/"),
+        lambda p: p["results"][0].update(name="Not A Slug"),
+    ],
+)
+def test_parse_index_rejects_malformed_payload(mutate: Callable[[dict[str, Any]], Any]) -> None:
+    payload = json.loads(json.dumps(INDEX_PAGE))
+    mutate(payload)
+
+    with pytest.raises(PokeApiResponseError):
+        parse_index(payload)
 
 
 @pytest.mark.parametrize(

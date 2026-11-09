@@ -173,7 +173,7 @@ class SqlitePokemonRepository:
             pokedex_id=pokedex_id,
             name=name,
             types=tuple(PokemonType(type_name) for (type_name,) in type_rows),
-            stats=BaseStats(*stats),
+            stats=BaseStats(**dict(zip(BaseStats.model_fields, stats, strict=True))),
             learnset=frozenset(json.loads(learnset)),
         )
 

@@ -1,10 +1,12 @@
 """Deterministic, type-based team analysis (no moves, abilities or stats yet)."""
 
-from dataclasses import dataclass
 from typing import Any
+
+from pydantic import computed_field
 
 from pokeverse.catalog import PokemonType
 from pokeverse.catalog.type_chart import effectiveness
+from pokeverse.model import FrozenModel
 from pokeverse.teams.models import Team
 
 # A type is a vulnerability when at least this many members are weak to it
@@ -12,8 +14,7 @@ from pokeverse.teams.models import Team
 MIN_WEAK_MEMBERS = 2
 
 
-@dataclass(frozen=True, slots=True)
-class TypeExposure:
+class TypeExposure(FrozenModel):
     """How one attacking type affects each team member."""
 
     attacking_type: PokemonType
@@ -40,21 +41,23 @@ class TypeExposure:
         }
 
 
-@dataclass(frozen=True, slots=True)
-class TeamAnalysis:
+class TeamAnalysis(FrozenModel):
     team: Team
     exposures: tuple[TypeExposure, ...]
     # Defending types none of the team's own types hit super-effectively (STAB only).
     offensive_gaps: tuple[PokemonType, ...]
 
+    @computed_field
     @property
     def vulnerabilities(self) -> tuple[TypeExposure, ...]:
         return tuple(exposure for exposure in self.exposures if exposure.is_vulnerability)
 
+    @computed_field
     @property
     def unresisted(self) -> tuple[PokemonType, ...]:
         return tuple(e.attacking_type for e in self.exposures if e.is_unresisted)
 
+    @computed_field
     @property
     def score(self) -> tuple[int, int, int, int]:
         """Lower is better; compared in order: vulnerabilities, members exposed by them,
@@ -86,7 +89,9 @@ def _exposure(team: Team, attacking: PokemonType) -> TypeExposure:
             weak.append(member.name)
         elif multiplier < 1:
             resists.append(member.name)
-    return TypeExposure(attacking, tuple(weak), tuple(resists), tuple(immune))
+    return TypeExposure(
+        attacking_type=attacking, weak=tuple(weak), resists=tuple(resists), immune=tuple(immune)
+    )
 
 
 def analyze_team(team: Team) -> TeamAnalysis:

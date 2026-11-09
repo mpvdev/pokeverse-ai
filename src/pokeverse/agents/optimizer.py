@@ -5,8 +5,9 @@ claim against the type chart and keeps a swap only if it strictly improves the t
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, get_args
+
+from pydantic import Field, InstanceOf, computed_field
 
 from pokeverse.agents.research import ChatModel
 from pokeverse.agents.tools import (
@@ -20,9 +21,10 @@ from pokeverse.catalog import (
     PokemonType,
     UpstreamUnavailableError,
 )
-from pokeverse.catalog.models import NAME_PATTERN
+from pokeverse.catalog.models import Slug
 from pokeverse.catalog.type_chart import effectiveness
-from pokeverse.llm import Completion, LlmRequestError, OutputSchema
+from pokeverse.llm import Completion, OutputSchema, parse_reply
+from pokeverse.model import FrozenModel
 from pokeverse.teams import Team, TeamAnalysis, analyze_team
 
 MAX_SWAPS = 3
@@ -30,7 +32,8 @@ MAX_CANDIDATES = 5
 OPTIMIZER_MAX_TOOL_ROUNDS = 8
 # Reasoning tokens count against this limit, and the reply lists claims, swaps and a critique.
 OPTIMIZER_MAX_TOKENS = 3000
-VERDICTS = ("weak", "resists", "immune", "neutral")
+Verdict = Literal["weak", "resists", "immune", "neutral"]
+VERDICTS: tuple[Verdict, ...] = get_args(Verdict)
 
 OPTIMIZER_SYSTEM_PROMPT = (
     "You are the PokéVerse Team Optimization Agent. You review a team you did not build. "
@@ -49,51 +52,8 @@ OPTIMIZER_SYSTEM_PROMPT = (
     "Use canonical names as returned by the tools."
 )
 
-_SLUG = {"type": "string", "pattern": f"^{NAME_PATTERN.pattern}$"}
-OPTIMIZATION_SCHEMA = OutputSchema(
-    name="team_optimization",
-    schema={
-        "type": "object",
-        "properties": {
-            "claims": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "member": _SLUG,
-                        "attacking_type": {
-                            "type": "string",
-                            "enum": [t.value for t in PokemonType],
-                        },
-                        "claimed": {"type": "string", "enum": list(VERDICTS)},
-                    },
-                    "required": ["member", "attacking_type", "claimed"],
-                    "additionalProperties": False,
-                },
-            },
-            "swaps": {
-                "type": "array",
-                "maxItems": MAX_SWAPS,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "out": _SLUG,
-                        "in": _SLUG,
-                        "reason": {"type": "string"},
-                    },
-                    "required": ["out", "in", "reason"],
-                    "additionalProperties": False,
-                },
-            },
-            "critique": {"type": "string"},
-        },
-        "required": ["claims", "swaps", "critique"],
-        "additionalProperties": False,
-    },
-)
 
-
-def verdict(multiplier: float) -> str:
+def verdict(multiplier: float) -> Verdict:
     if multiplier == 0:
         return "immune"
     if multiplier > 1:
@@ -101,56 +61,62 @@ def verdict(multiplier: float) -> str:
     return "resists" if multiplier < 1 else "neutral"
 
 
-@dataclass(frozen=True, slots=True)
-class ClaimCheck:
+class Claim(FrozenModel):
+    member: Slug
+    attacking_type: PokemonType
+    claimed: Verdict
+
+
+class ProposedSwap(FrozenModel):
+    out: Slug
+    into: Slug = Field(alias="in")
+    reason: str
+
+
+class OptimizationReply(FrozenModel):
+    claims: tuple[Claim, ...]
+    swaps: tuple[ProposedSwap, ...] = Field(max_length=MAX_SWAPS)
+    critique: str
+
+
+OPTIMIZATION_SCHEMA = OutputSchema.from_model("team_optimization", OptimizationReply)
+
+
+class ClaimCheck(FrozenModel):
     member: str
-    attacking_type: str
-    claimed: str
+    attacking_type: PokemonType
+    claimed: Verdict
     # None when the Pokémon could not be found, so the claim could not be checked.
-    actual: str | None
+    actual: Verdict | None
     multiplier: float | None
 
+    @computed_field
     @property
     def correct(self) -> bool:
         return self.claimed == self.actual
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "member": self.member,
-            "attacking_type": self.attacking_type,
-            "claimed": self.claimed,
-            "actual": self.actual,
-            "multiplier": self.multiplier,
-            "correct": self.correct,
-        }
+        return self.model_dump(mode="json")
 
 
-@dataclass(frozen=True, slots=True)
-class SwapDecision:
+class SwapDecision(FrozenModel):
     out: str
-    into: str
+    into: str = Field(serialization_alias="in")
     reason: str
     accepted: bool
     verdict: str
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "out": self.out,
-            "in": self.into,
-            "reason": self.reason,
-            "accepted": self.accepted,
-            "verdict": self.verdict,
-        }
+        return self.model_dump(mode="json", by_alias=True)
 
 
-@dataclass(frozen=True, slots=True)
-class OptimizationResult:
+class OptimizationResult(FrozenModel):
     original: TeamAnalysis
     final: TeamAnalysis
     swaps: tuple[SwapDecision, ...]
     claims: tuple[ClaimCheck, ...]
     critique: str
-    completion: Completion
+    completion: InstanceOf[Completion] = Field(exclude=True)
 
     @property
     def incorrect_claims(self) -> tuple[ClaimCheck, ...]:
@@ -213,46 +179,48 @@ class TeamOptimizationAgent:
             output_schema=OPTIMIZATION_SCHEMA,
             max_tool_rounds=OPTIMIZER_MAX_TOOL_ROUNDS,
         )
-        try:
-            data = completion.data or {}
-            claims = tuple(self._check_claim(team, claim) for claim in data["claims"])
-            proposed = [(s["out"], s["in"], s["reason"]) for s in data["swaps"]][:MAX_SWAPS]
-            critique = data["critique"]
-        except (KeyError, TypeError, ValueError) as error:
-            raise LlmRequestError(
-                f"Model reply failed validation: {error}", completion=completion
-            ) from error
+        reply = parse_reply(OptimizationReply, completion)
+        claims = tuple(self._check_claim(team, claim) for claim in reply.claims)
 
         current = original
         decisions = []
-        for out, into, reason in proposed:
-            decision, current = self._try_swap(current, out, into, reason, keep_names)
+        for swap in reply.swaps:
+            decision, current = self._try_swap(current, swap, keep_names)
             decisions.append(decision)
-        return OptimizationResult(original, current, tuple(decisions), claims, critique, completion)
+        return OptimizationResult(
+            original=original,
+            final=current,
+            swaps=tuple(decisions),
+            claims=claims,
+            critique=reply.critique,
+            completion=completion,
+        )
 
-    def _check_claim(self, team: Team, claim: dict[str, str]) -> ClaimCheck:
-        member = next((m for m in team.members if m.name == claim["member"]), None)
+    def _check_claim(self, team: Team, claim: Claim) -> ClaimCheck:
+        member = next((m for m in team.members if m.name == claim.member), None)
         if member is None:
             try:
-                member = self._catalog.get(normalize_identifier(claim["member"]))
+                member = self._catalog.get(claim.member)
             except PokemonNotInCatalogError, UpstreamUnavailableError:
                 member = None
-        multiplier = (
-            effectiveness(PokemonType(claim["attacking_type"]), member.types) if member else None
-        )
+        multiplier = effectiveness(claim.attacking_type, member.types) if member else None
         return ClaimCheck(
-            member=claim["member"],
-            attacking_type=claim["attacking_type"],
-            claimed=claim["claimed"],
+            member=claim.member,
+            attacking_type=claim.attacking_type,
+            claimed=claim.claimed,
             actual=verdict(multiplier) if multiplier is not None else None,
             multiplier=multiplier,
         )
 
     def _try_swap(
-        self, current: TeamAnalysis, out: str, into: str, reason: str, keep: set[Any]
+        self, current: TeamAnalysis, swap: ProposedSwap, keep: set[Any]
     ) -> tuple[SwapDecision, TeamAnalysis]:
+        out, into, reason = swap.out, swap.into, swap.reason
+
         def reject(why: str) -> tuple[SwapDecision, TeamAnalysis]:
-            return SwapDecision(out, into, reason, False, why), current
+            return SwapDecision(
+                out=out, into=into, reason=reason, accepted=False, verdict=why
+            ), current
 
         names = list(current.team.names)
         if out in keep:
@@ -265,8 +233,10 @@ class TeamOptimizationAgent:
             return reject(f"could not look up {into!r}: {error}")
         members = list(current.team.members)
         members[names.index(out)] = newcomer
-        candidate = analyze_team(Team(tuple(members)))
+        candidate = analyze_team(Team(members=tuple(members)))
         if candidate.score >= current.score:
             return reject(f"no improvement: score {current.score} -> {candidate.score}")
         verdict_text = f"improved: score {current.score} -> {candidate.score}"
-        return SwapDecision(out, into, reason, True, verdict_text), candidate
+        return SwapDecision(
+            out=out, into=into, reason=reason, accepted=True, verdict=verdict_text
+        ), candidate
