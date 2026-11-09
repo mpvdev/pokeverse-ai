@@ -23,7 +23,13 @@ from pokeverse.agents import (
     normalize_identifier,
 )
 from pokeverse.agents.supervisor import OptimizeMode
-from pokeverse.battles import MAX_MOVES, load_battler
+from pokeverse.battles import (
+    MAX_MOVES,
+    battle_stats,
+    calculate_damage,
+    damage_range,
+    load_battler,
+)
 from pokeverse.catalog import (
     Move,
     MoveNotInCatalogError,
@@ -34,6 +40,7 @@ from pokeverse.catalog import (
     UpstreamUnavailableError,
 )
 from pokeverse.catalog.pokeapi import PokeApiClient
+from pokeverse.catalog.type_chart import effectiveness
 from pokeverse.evals import RESEARCH_CASES, EvalResult, run_case
 from pokeverse.evals.compare import COMPARE_CASES, SYSTEMS
 from pokeverse.evals.compare import run_case as compare_case
@@ -273,6 +280,57 @@ def moveset_command(
         typer.echo(format_pokemon(battler.pokemon))
         for move in battler.moves:
             typer.echo(f"  {format_move(move)}")
+
+
+@app.command("damage")
+def damage_command(
+    ctx: typer.Context,
+    attacker: Annotated[str, typer.Argument(help="Attacking Pokémon.")],
+    move: Annotated[str, typer.Argument(help="Move used by the attacker.")],
+    defender: Annotated[str, typer.Argument(help="Defending Pokémon.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Damage range of one move at level 50 (no critical hit), plus the critical-hit maximum."""
+    settings: Settings = ctx.obj
+    try:
+        with open_catalog(settings, offline=offline) as catalog:
+            source = catalog.get(normalize_identifier(attacker))
+            target = catalog.get(normalize_identifier(defender))
+            used = catalog.get_move(normalize_identifier(move))
+        low, high = damage_range(source, target, used)
+        critical = calculate_damage(source, target, used, critical=True)
+    except ValueError as error:
+        raise fail(str(error), EXIT_INVALID_INPUT) from error
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+    except UpstreamUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+
+    hp = battle_stats(target.stats).hp
+    multiplier = effectiveness(used.type, target.types)
+    if as_json:
+        result = {
+            "attacker": source.name,
+            "move": used.name,
+            "defender": target.name,
+            "min": low,
+            "max": high,
+            "critical_max": critical,
+            "defender_hp": hp,
+            "effectiveness": multiplier,
+            "stab": used.type in source.types,
+        }
+        typer.echo(json.dumps(result))
+        return
+    stab = ", STAB" if used.type in source.types else ""
+    typer.echo(
+        f"{source.display_name} {used.display_name} vs {target.display_name}: "
+        f"{low}-{high} damage ({low / hp:.0%}-{high / hp:.0%} of {hp} HP), "
+        f"{multiplier:g}x{stab}; critical hit up to {critical}"
+    )
 
 
 @app.command("team")

@@ -265,6 +265,39 @@ def test_moveset_unknown_move_exits_not_found(db: str, upstream: Upstream) -> No
     assert "does not exist" in result.stderr
 
 
+def test_damage_prints_range_and_critical_maximum(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "damage", "Pikachu", "Thunderbolt", "Charizard")
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        "Pikachu Thunderbolt vs Charizard: 68-84 damage (44%-55% of 153 HP), 2x, STAB; "
+        "critical hit up to 126\n"
+    )
+
+
+def test_damage_json(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "damage", "pikachu", "thunderbolt", "charizard", "--json")
+
+    assert json.loads(result.stdout) == {
+        "attacker": "pikachu",
+        "move": "thunderbolt",
+        "defender": "charizard",
+        "min": 68,
+        "max": 84,
+        "critical_max": 126,
+        "defender_hp": 153,
+        "effectiveness": 2.0,
+        "stab": True,
+    }
+
+
+def test_damage_rejects_status_moves(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "damage", "charizard", "swords-dance", "pikachu")
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "power-based" in result.stderr
+
+
 def test_team_prints_analysis(db: str, upstream: Upstream) -> None:
     result = invoke(db, "team", "Pikachu", "charizard")
 

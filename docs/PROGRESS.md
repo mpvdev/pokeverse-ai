@@ -108,9 +108,11 @@ Deliverable: an AI-assisted battle strategy system. Battle mechanics are determi
 
 - [x] Step 3: learnsets and battlers — `Pokemon.learnset` (frozenset of move slugs learnable in any game, by any method; never in `to_dict()`), parsed from the `moves` list of the `/pokemon` payload we already fetch, so no extra requests (real learnsets are 94–131 names; fetching every move's details would cost ~100 requests per Pokémon). Catalog schema v4 adds `pokemon_learnset` (one JSON array per Pokémon); v3 rows have no learnset and are re-imported on the next online lookup, moves are kept. New `pokeverse.battles` package: immutable `Battler` (a Pokémon plus 1–4 distinct moves, each learnable and with a fixed power; status and fixed-damage moves are rejected because the simplified engine cannot apply them) and `load_battler`, which checks the move count and learnset before fetching any move details. CLI: `pokeverse learnset <pokemon> [--json] [--offline]` and `pokeverse moveset <pokemon> <move>... [--json] [--offline]` (exit 2 for invalid movesets). The default moveset moved to Step 6, where the damage formula can rank moves. Known limit: Pokémon with no damaging moves (e.g. Ditto, Transform only) cannot battle.
 
+- [x] Step 4: battle stats and damage — `battle_stats(base)` gives level-50 stats (31 IVs, 0 EVs, neutral nature; base HP 1 stays 1, as for Shedinja). The Gen 6+ damage formula follows Pokémon Showdown's integer order: base damage, critical hit ×1.5 (1 in 24, Gen 7+), random roll 85–100%, STAB ×1.5 rounded half down, type effectiveness as repeated doubling/halving, minimum 1 unless immune. `calculate_damage` (explicit roll and critical), `damage_range` (min/max without a critical hit) and `roll_damage` (draws from an injected `random.Random`, so seeded results are reproducible) return plain numbers; accuracy is left to the engine (Step 5). Expected values in tests are hand-computed from the algorithm; stats match published level-50 figures (Garchomp 183/150/115/100/105/122). `pokeverse damage <attacker> <move> <defender> [--json] [--offline]` shows the range, % of the defender's HP, effectiveness, STAB and the critical-hit maximum. Not cross-checked against Smogon's calculator (Node is not installed).
+
 ## Next Up
 
-- Phase 3 Step 4: battle stats and damage.
+- Phase 3 Step 5: battle engine.
 - Carried over from Phase 2: repeated runs per cell in `compare` before ranking systems; `goal` constraints such as "Fire-only" are enforced only by the model; in `auto` mode, wrong type claims on teams without vulnerabilities are not fact-checked; the Strands spike (re-implement the Supervisor and compare with `pokeverse compare`).
 
 ## Running Locally
@@ -127,6 +129,7 @@ uv run pokeverse list
 uv run pokeverse move "Swords Dance"
 uv run pokeverse learnset garchomp
 uv run pokeverse moveset garchomp earthquake "Dragon Claw" "Stone Edge" "Fire Fang"
+uv run pokeverse damage garchomp earthquake pikachu
 uv run pokeverse ask "What type is Pikachu?" --usage   # needs OPENAI_API_KEY in .env or the environment
 uv run pokeverse ask "What type is Pikachu?" --no-tools --usage   # model answers from memory only
 uv run pokeverse ask "What type is Pikachu?" --json              # validated structured answer
