@@ -153,6 +153,16 @@ def test_parse_status_move_with_null_power_and_accuracy() -> None:
     assert parse_move(load_move_fixture("swords-dance")) == SWORDS_DANCE
 
 
+def test_parse_normalizes_pokeapi_quirks() -> None:
+    status = load_move_fixture("swords-dance")
+    status.update(power=60, accuracy=0)
+    damaging = load_move_fixture("thunderbolt")
+    damaging.update(power=0, accuracy=0)
+
+    assert (parse_move(status).power, parse_move(status).accuracy) == (None, None)
+    assert (parse_move(damaging).power, parse_move(damaging).accuracy) == (None, None)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [

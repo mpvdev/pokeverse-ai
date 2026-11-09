@@ -112,9 +112,11 @@ Deliverable: an AI-assisted battle strategy system. Battle mechanics are determi
 
 - [x] Step 5: battle engine — `pokeverse.battles.engine`, pure state transitions over immutable `BattleState` → `Side` → `Combatant` (battler + current HP). Actions are `UseMove(index)` or `Switch(index)`; `legal_actions` lists them (only switches after a faint, nothing once the battle is over), and every choice is checked against it (`IllegalActionError`) — the hook for validating agent choices later. `play_turn` resolves switches first, then moves by priority, speed and a random tie-break; type immunity is checked before the accuracy roll (Showdown's order); a battler knocked out earlier in the turn does not act. `replace_fainted` handles forced switches. `run_battle` drives two `Player`s (a one-method protocol) until a side is defeated or `MAX_TURNS` (100) is reached (draw), and returns structured `BattleEvent`s (`to_dict`, `describe`) for later analysis. Same seed, same battle. Simplifications: PP is not tracked (so no Struggle); the turn cap prevents endless mutual-immunity battles. Observed: a naive first-option player keeps using Earthquake on an immune Charizard and loses — the baseline Step 6 improves on.
 
+- [x] Step 6: baseline players and `pokeverse battle` — default movesets (`pokeverse.battles.movesets`): `move_score` = power × accuracy × STAB × matching attack stat; `choose_moveset` takes the best-scoring move, then the best that add super-effective coverage (one move per type); `default_battler` needs every learnable move (~100 PokéAPI requests the first time per Pokémon, ~4 s; cached afterwards, so offline works). `is_battle_move` / `UNMODELLED_MOVES` exclude moves whose drawback or special rule the engine does not model (self-KO, recharge, charge turn, conditional, HP-scaled power, self-damage, non-standard attack stat); `Battler` rejects them too. PokéAPI quirks fixed at ingestion: `0` power/accuracy means "none" and status moves never have power (found on Dragon Cheer). Players (`pokeverse.battles.players`): `RandomPlayer` and `GreedyPlayer` (highest expected damage = average roll × accuracy, capped at the foe's HP; priority breaks ties; switches only when no move can hurt; replaces with the best attacker). `pokeverse battle --side1 … --side2 … [--player1/2 greedy|random] [--seed] [--runs] [--json] [--offline]` (members `name` or `name:move,move`); `pokeverse moveset <pokemon>` without moves shows the default. Results (Garchomp/Pikachu/Charizard mirror, 50 seeds): greedy beat random 43–7 and 48–2. Greedy vs greedy was 18–32 over 50 seeds but 481–519 over 1,000 — no side bias; 50 battles are too few to compare win rates. Known limits: lock-in moves (Outrage) look free because confusion is not modelled; default movesets are opponent-independent.
+
 ## Next Up
 
-- Phase 3 Step 6: baseline players and `pokeverse battle`.
+- Phase 3 Step 7: Battle Strategy Agent.
 - Carried over from Phase 2: repeated runs per cell in `compare` before ranking systems; `goal` constraints such as "Fire-only" are enforced only by the model; in `auto` mode, wrong type claims on teams without vulnerabilities are not fact-checked; the Strands spike (re-implement the Supervisor and compare with `pokeverse compare`).
 
 ## Running Locally
@@ -132,6 +134,8 @@ uv run pokeverse move "Swords Dance"
 uv run pokeverse learnset garchomp
 uv run pokeverse moveset garchomp earthquake "Dragon Claw" "Stone Edge" "Fire Fang"
 uv run pokeverse damage garchomp earthquake pikachu
+uv run pokeverse battle --side1 garchomp --side1 pikachu --side2 tyranitar --side2 gyarados --seed 1
+uv run pokeverse battle --side1 garchomp --side2 garchomp --player2 random --runs 100
 uv run pokeverse ask "What type is Pikachu?" --usage   # needs OPENAI_API_KEY in .env or the environment
 uv run pokeverse ask "What type is Pikachu?" --no-tools --usage   # model answers from memory only
 uv run pokeverse ask "What type is Pikachu?" --json              # validated structured answer

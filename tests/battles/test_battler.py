@@ -26,6 +26,7 @@ VOLT_TACKLE = Move(344, "volt-tackle", T.ELECTRIC, D.PHYSICAL, 120, 100, 0, 15)
 THUNDER_WAVE = Move(86, "thunder-wave", T.ELECTRIC, D.STATUS, None, 90, 0, 20)
 SEISMIC_TOSS = Move(69, "seismic-toss", T.FIGHTING, D.PHYSICAL, None, 100, 0, 20)
 FLAMETHROWER = Move(53, "flamethrower", T.FIRE, D.SPECIAL, 90, 100, 0, 15)
+HYPER_BEAM = Move(63, "hyper-beam", T.NORMAL, D.SPECIAL, 150, 90, 0, 5)
 
 PIKACHU = Pokemon(
     25,
@@ -41,6 +42,7 @@ PIKACHU = Pokemon(
             "volt-tackle",
             "thunder-wave",
             "seismic-toss",
+            "hyper-beam",
         }
     ),
 )
@@ -68,8 +70,9 @@ def test_battler_with_four_moves() -> None:
         (("thunderbolt",), "tuple of Move"),
         ((THUNDERBOLT, THUNDERBOLT), "duplicates"),
         ((THUNDERBOLT, FLAMETHROWER), "pikachu cannot learn: flamethrower"),
-        ((THUNDER_WAVE,), "fixed power are supported in battle: thunder-wave"),
-        ((SEISMIC_TOSS,), "fixed power are supported in battle: seismic-toss"),
+        ((THUNDER_WAVE,), "not supported in battle: thunder-wave"),
+        ((SEISMIC_TOSS,), "not supported in battle: seismic-toss"),
+        ((HYPER_BEAM,), "not supported in battle: hyper-beam"),
     ],
 )
 def test_invalid_battler_is_rejected(moves: Any, message: str) -> None:

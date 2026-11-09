@@ -1,6 +1,12 @@
 """Deterministic battle mechanics."""
 
-from pokeverse.battles.battler import MAX_MOVES, Battler, load_battler
+from pokeverse.battles.battler import (
+    MAX_MOVES,
+    UNMODELLED_MOVES,
+    Battler,
+    is_battle_move,
+    load_battler,
+)
 from pokeverse.battles.damage import (
     CRITICAL_HIT_ODDS,
     MAX_ROLL,
@@ -8,6 +14,7 @@ from pokeverse.battles.damage import (
     DamageRoll,
     calculate_damage,
     damage_range,
+    expected_damage,
     roll_damage,
 )
 from pokeverse.battles.engine import (
@@ -28,6 +35,8 @@ from pokeverse.battles.engine import (
     run_battle,
     start_battle,
 )
+from pokeverse.battles.movesets import choose_moveset, default_battler, move_score
+from pokeverse.battles.players import PLAYER_NAMES, GreedyPlayer, RandomPlayer, make_player
 from pokeverse.battles.stats import LEVEL, BattleStats, battle_stats
 
 __all__ = [
@@ -37,6 +46,8 @@ __all__ = [
     "MAX_ROLL",
     "MAX_TURNS",
     "MIN_ROLL",
+    "PLAYER_NAMES",
+    "UNMODELLED_MOVES",
     "Action",
     "BattleEvent",
     "BattleResult",
@@ -45,16 +56,24 @@ __all__ = [
     "Battler",
     "Combatant",
     "DamageRoll",
+    "GreedyPlayer",
     "IllegalActionError",
     "Player",
+    "RandomPlayer",
     "Side",
     "Switch",
     "UseMove",
     "battle_stats",
     "calculate_damage",
+    "choose_moveset",
     "damage_range",
+    "default_battler",
+    "expected_damage",
+    "is_battle_move",
     "legal_actions",
     "load_battler",
+    "make_player",
+    "move_score",
     "play_turn",
     "replace_fainted",
     "roll_damage",

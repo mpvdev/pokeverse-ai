@@ -21,6 +21,7 @@ from pokeverse.cli import (
 )
 
 FIXTURES = Path(__file__).parent / "catalog" / "fixtures" / "pokeapi"
+PIKACHU_FIXTURE = (FIXTURES / "pikachu.json").read_text()
 
 runner = CliRunner()
 
@@ -248,7 +249,7 @@ def test_moveset_rejects_status_moves(db: str, upstream: Upstream) -> None:
     result = invoke(db, "moveset", "charizard", "swords-dance")
 
     assert result.exit_code == EXIT_INVALID_INPUT
-    assert "fixed power" in result.stderr
+    assert "not supported in battle: swords-dance" in result.stderr
 
 
 def test_moveset_checks_the_move_count_before_any_lookup(db: str, upstream: Upstream) -> None:
@@ -259,7 +260,7 @@ def test_moveset_checks_the_move_count_before_any_lookup(db: str, upstream: Upst
 
 
 def test_moveset_unknown_move_exits_not_found(db: str, upstream: Upstream) -> None:
-    result = invoke(db, "moveset", "pikachu", "surf")
+    result = invoke(db, "moveset", "charizard", "air-slash")
 
     assert result.exit_code == EXIT_NOT_FOUND
     assert "does not exist" in result.stderr
@@ -296,6 +297,85 @@ def test_damage_rejects_status_moves(db: str, upstream: Upstream) -> None:
 
     assert result.exit_code == EXIT_INVALID_INPUT
     assert "power-based" in result.stderr
+
+
+def test_moveset_without_moves_shows_the_default_moveset(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "pikachu")
+
+    assert result.exit_code == 0
+    assert [line.split(" — ")[0] for line in result.stdout.splitlines()[1:]] == [
+        "  #0344 Volt Tackle",
+        "  #0057 Surf",
+        "  #0231 Iron Tail",
+        "  #0098 Quick Attack",
+    ]
+    assert len(upstream.requests) == 1 + len(json.loads(PIKACHU_FIXTURE)["moves"])
+
+
+def test_default_moveset_needs_every_learnable_move(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "charizard")
+
+    assert result.exit_code == EXIT_NOT_FOUND
+    assert "does not exist" in result.stderr
+
+
+def test_battle_prints_teams_events_and_winner(db: str, upstream: Upstream) -> None:
+    result = invoke(
+        db, "battle", "--side1", "pikachu:thunderbolt", "--side2", "pikachu", "--seed", "3"
+    )
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines[0] == "Side 1 (greedy): Pikachu [Thunderbolt]"
+    assert lines[1] == "Side 2 (greedy): Pikachu [Volt Tackle, Surf, Iron Tail, Quick Attack]"
+    assert lines[2] == "[0] Side 1 sends out Pikachu."
+    assert lines[-1].startswith("Winner: Side ")
+
+
+def test_battle_is_reproducible_and_json(db: str, upstream: Upstream) -> None:
+    args = ["battle", "--side1", "pikachu:thunderbolt", "--side2", "pikachu:thunderbolt"]
+    first = json.loads(invoke(db, *args, "--seed", "5", "--json").stdout)
+    second = json.loads(invoke(db, *args, "--seed", "5", "--json", "--offline").stdout)
+
+    assert first == second
+    assert first["players"] == ["greedy", "greedy"]
+    assert first["teams"][0] == [{"pokemon": "pikachu", "moves": ["thunderbolt"]}]
+    assert first["winner"] in (0, 1)
+    assert first["events"][-1]["kind"] == "win"
+
+
+def test_battle_runs_summary(db: str, upstream: Upstream) -> None:
+    result = invoke(
+        db,
+        "battle",
+        "--side1",
+        "pikachu:thunderbolt",
+        "--side2",
+        "pikachu:thunderbolt",
+        "--player2",
+        "random",
+        "--runs",
+        "4",
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith("4 battles (seeds 0-3): Side 1 (greedy) won ")
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--side1", "pikachu", "--side2", "pikachu", "--player1", "genius"],
+        ["--side1", "pikachu", *["--side2", "pikachu"] * 7],
+    ],
+)
+def test_battle_validates_players_and_team_size_before_lookups(
+    db: str, upstream: Upstream, args: list[str]
+) -> None:
+    result = invoke(db, "battle", *args)
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert upstream.requests == []
 
 
 def test_team_prints_analysis(db: str, upstream: Upstream) -> None:

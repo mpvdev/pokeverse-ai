@@ -1,0 +1,1 @@
+{"id": 57, "name": "surf", "accuracy": 100, "damage_class": {"name": "special", "url": "https://pokeapi.co/api/v2/move-damage-class/3/"}, "power": 90, "pp": 15, "priority": 0, "type": {"name": "water", "url": "https://pokeapi.co/api/v2/type/11/"}}

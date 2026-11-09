@@ -88,15 +88,18 @@ def parse_move(payload: Mapping[str, Any]) -> Move:
     """Map a PokéAPI ``/move/{id}`` payload to a validated ``Move``.
 
     Moves outside our model (e.g. Shadow-type moves, Z-moves) are rejected as unsupported.
+    PokéAPI quirks are normalized: 0 means "none" for power and accuracy (e.g. Dragon Cheer),
+    and status moves never have power.
     """
     try:
+        damage_class = DamageClass(payload["damage_class"]["name"])
         return Move(
             move_id=payload["id"],
             name=payload["name"],
             type=PokemonType(payload["type"]["name"]),
-            damage_class=DamageClass(payload["damage_class"]["name"]),
-            power=payload["power"],
-            accuracy=payload["accuracy"],
+            damage_class=damage_class,
+            power=None if damage_class is DamageClass.STATUS else payload["power"] or None,
+            accuracy=payload["accuracy"] or None,
             priority=payload["priority"],
             pp=payload["pp"],
         )

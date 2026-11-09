@@ -2,6 +2,7 @@
 
 import json
 import os
+import random
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -25,10 +26,16 @@ from pokeverse.agents import (
 from pokeverse.agents.supervisor import OptimizeMode
 from pokeverse.battles import (
     MAX_MOVES,
+    PLAYER_NAMES,
+    Battler,
+    BattleResult,
     battle_stats,
     calculate_damage,
     damage_range,
+    default_battler,
     load_battler,
+    make_player,
+    run_battle,
 )
 from pokeverse.catalog import (
     Move,
@@ -144,6 +151,26 @@ def fail(message: str, code: int) -> typer.Exit:
     return typer.Exit(code)
 
 
+def resolve_battler(catalog: PokemonCatalog, pokemon: str, moves: list[str]) -> Battler:
+    identifier = normalize_identifier(pokemon)
+    if not moves:
+        return default_battler(catalog, identifier)
+    move_names = [normalize_identifier(move) for move in moves]
+    if any(isinstance(name, int) for name in move_names):
+        raise ValueError("moves must be given by name")
+    return load_battler(catalog, identifier, cast(list[str], move_names))
+
+
+def parse_member(spec: str) -> tuple[str, list[str]]:
+    pokemon, _, moves = spec.partition(":")
+    return pokemon, [move for move in moves.split(",") if move.strip()]
+
+
+def format_battler(battler: Battler) -> str:
+    moves = ", ".join(move.display_name for move in battler.moves)
+    return f"{battler.pokemon.display_name} [{moves}]"
+
+
 @app.command("pokemon")
 def pokemon_command(
     ctx: typer.Context,
@@ -252,21 +279,22 @@ def learnset_command(
 def moveset_command(
     ctx: typer.Context,
     pokemon: Annotated[str, typer.Argument(help="Pokémon name or Pokédex id.")],
-    moves: Annotated[list[str], typer.Argument(help=f"1-{MAX_MOVES} move names.")],
+    moves: Annotated[
+        list[str] | None,
+        typer.Argument(help=f"1-{MAX_MOVES} move names; omit for the default moveset."),
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
     offline: Annotated[
         bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
     ] = False,
 ) -> None:
-    """Check a battle moveset: every move must be learnable and deal power-based damage."""
+    """Check a battle moveset, or show the default one (first use fetches every learnable move)."""
     settings: Settings = ctx.obj
     try:
-        identifier = normalize_identifier(pokemon)
-        move_names = [normalize_identifier(move) for move in moves]
-        if any(isinstance(name, int) for name in move_names):
-            raise ValueError("moves must be given by name")
+        if moves and len(moves) > MAX_MOVES:
+            raise ValueError(f"a battler must have between 1 and {MAX_MOVES} moves")
         with open_catalog(settings, offline=offline) as catalog:
-            battler = load_battler(catalog, identifier, cast(list[str], move_names))
+            battler = resolve_battler(catalog, pokemon, moves or [])
     except ValueError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
     except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
@@ -330,6 +358,115 @@ def damage_command(
         f"{source.display_name} {used.display_name} vs {target.display_name}: "
         f"{low}-{high} damage ({low / hp:.0%}-{high / hp:.0%} of {hp} HP), "
         f"{multiplier:g}x{stab}; critical hit up to {critical}"
+    )
+
+
+@app.command("battle")
+def battle_command(
+    ctx: typer.Context,
+    side1: Annotated[
+        list[str],
+        typer.Option(
+            "--side1",
+            help="Side 1 member: 'name' (default moveset) or 'name:move,move'; repeat per member.",
+        ),
+    ],
+    side2: Annotated[
+        list[str],
+        typer.Option("--side2", help="A side 2 member, same format as --side1."),
+    ],
+    player1: Annotated[
+        str, typer.Option("--player1", help=f"Side 1 player: {', '.join(PLAYER_NAMES)}.")
+    ] = "greedy",
+    player2: Annotated[
+        str, typer.Option("--player2", help=f"Side 2 player: {', '.join(PLAYER_NAMES)}.")
+    ] = "greedy",
+    seed: Annotated[int, typer.Option("--seed", help="Random seed of the first battle.")] = 0,
+    runs: Annotated[
+        int, typer.Option("--runs", min=1, help="Number of battles (seeds seed, seed+1, ...).")
+    ] = 1,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Simulate battles between two teams with code-only players (no LLM)."""
+    settings: Settings = ctx.obj
+    names = (player1, player2)
+    try:
+        for name in names:
+            make_player(name, random.Random(0))
+        for side in (side1, side2):
+            if len(side) > MAX_TEAM_SIZE:
+                raise ValueError(f"a battle team must have between 1 and {MAX_TEAM_SIZE} battlers")
+        with open_catalog(settings, offline=offline) as catalog:
+            teams = [
+                [resolve_battler(catalog, *parse_member(spec)) for spec in side]
+                for side in (side1, side2)
+            ]
+        results: list[tuple[int, BattleResult]] = []
+        for battle_seed in range(seed, seed + runs):
+            players = (
+                make_player(player1, random.Random(f"{battle_seed}:1")),
+                make_player(player2, random.Random(f"{battle_seed}:2")),
+            )
+            result = run_battle(teams[0], teams[1], players, random.Random(battle_seed))
+            results.append((battle_seed, result))
+    except ValueError as error:
+        raise fail(str(error), EXIT_INVALID_INPUT) from error
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+    except UpstreamUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+
+    team_names = [
+        [{"pokemon": b.pokemon.name, "moves": [m.name for m in b.moves]} for b in team]
+        for team in teams
+    ]
+    if runs == 1:
+        battle_seed, result = results[0]
+        if as_json:
+            report = {
+                "seed": battle_seed,
+                "players": list(names),
+                "teams": team_names,
+                "winner": result.winner,
+                "turns": result.turns,
+                "events": [event.to_dict() for event in result.events],
+            }
+            typer.echo(json.dumps(report))
+            return
+        for index, team in enumerate(teams):
+            members = ", ".join(format_battler(battler) for battler in team)
+            typer.echo(f"Side {index + 1} ({names[index]}): {members}")
+        for event in result.events:
+            typer.echo(f"[{event.turn}] {event.describe()}")
+        if result.winner is None:
+            typer.echo(f"Draw after {result.turns} turns.")
+        else:
+            winner = result.winner
+            typer.echo(f"Winner: Side {winner + 1} ({names[winner]}) after {result.turns} turns.")
+        return
+
+    wins = [sum(1 for _, r in results if r.winner == side) for side in (0, 1)]
+    draws = runs - sum(wins)
+    average = sum(r.turns for _, r in results) / runs
+    if as_json:
+        report = {
+            "runs": runs,
+            "players": list(names),
+            "teams": team_names,
+            "wins": wins,
+            "draws": draws,
+            "average_turns": average,
+            "results": [{"seed": s, "winner": r.winner, "turns": r.turns} for s, r in results],
+        }
+        typer.echo(json.dumps(report))
+        return
+    typer.echo(
+        f"{runs} battles (seeds {seed}-{seed + runs - 1}): "
+        f"Side 1 ({names[0]}) won {wins[0]}, Side 2 ({names[1]}) won {wins[1]}, "
+        f"draws {draws}; average {average:.1f} turns."
     )
 
 

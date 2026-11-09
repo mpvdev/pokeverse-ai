@@ -8,10 +8,75 @@ from pokeverse.catalog import DamageClass, Move, Pokemon, PokemonCatalog
 
 MAX_MOVES = 4
 
+UNMODELLED_MOVES = frozenset(
+    {
+        "explosion",
+        "self-destruct",
+        "misty-explosion",
+        "hyper-beam",
+        "giga-impact",
+        "blast-burn",
+        "frenzy-plant",
+        "hydro-cannon",
+        "rock-wrecker",
+        "roar-of-time",
+        "prismatic-laser",
+        "eternabeam",
+        "meteor-assault",
+        "solar-beam",
+        "solar-blade",
+        "fly",
+        "dig",
+        "dive",
+        "bounce",
+        "phantom-force",
+        "shadow-force",
+        "sky-attack",
+        "skull-bash",
+        "razor-wind",
+        "freeze-shock",
+        "ice-burn",
+        "meteor-beam",
+        "electro-shot",
+        "sky-drop",
+        "focus-punch",
+        "future-sight",
+        "doom-desire",
+        "dream-eater",
+        "fake-out",
+        "first-impression",
+        "last-resort",
+        "belch",
+        "snore",
+        "sucker-punch",
+        "synchronoise",
+        "steel-roller",
+        "poltergeist",
+        "burn-up",
+        "water-spout",
+        "eruption",
+        "dragon-energy",
+        "steel-beam",
+        "mind-blown",
+        "chloroblast",
+        "foul-play",
+        "body-press",
+    }
+)
+
+
+def is_battle_move(move: Move) -> bool:
+    """Power-based damage whose drawback, if any, the engine can fairly ignore."""
+    return (
+        move.damage_class is not DamageClass.STATUS
+        and move.power is not None
+        and move.name not in UNMODELLED_MOVES
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class Battler:
-    """An immutable battler with 1-4 distinct, learnable, power-based damaging moves."""
+    """An immutable battler with 1-4 distinct, learnable moves that the engine supports."""
 
     pokemon: Pokemon
     moves: tuple[Move, ...]
@@ -29,14 +94,11 @@ class Battler:
         unlearnable = [name for name in names if name not in self.pokemon.learnset]
         if unlearnable:
             raise ValueError(f"{self.pokemon.name} cannot learn: {', '.join(unlearnable)}")
-        unsupported = [
-            move.name
-            for move in self.moves
-            if move.damage_class is DamageClass.STATUS or move.power is None
-        ]
+        unsupported = [move.name for move in self.moves if not is_battle_move(move)]
         if unsupported:
             raise ValueError(
-                f"only moves with a fixed power are supported in battle: {', '.join(unsupported)}"
+                f"moves not supported in battle: {', '.join(unsupported)} (status, fixed-damage, "
+                "self-KO, recharge, charge-turn and conditional moves are not modelled)"
             )
 
     def to_dict(self) -> dict[str, Any]:

@@ -75,6 +75,12 @@ def damage_range(attacker: Pokemon, defender: Pokemon, move: Move) -> tuple[int,
     )
 
 
+def expected_damage(attacker: Pokemon, defender: Pokemon, move: Move) -> float:
+    """Average non-critical damage weighted by the chance to hit."""
+    low, high = damage_range(attacker, defender, move)
+    return (low + high) / 2 * (move.accuracy or 100) / 100
+
+
 def roll_damage(attacker: Pokemon, defender: Pokemon, move: Move, rng: random.Random) -> DamageRoll:
     """One hit with a random critical hit (1 in 24) and random roll, drawn from ``rng``."""
     critical = rng.randrange(CRITICAL_HIT_ODDS) == 0
