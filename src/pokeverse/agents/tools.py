@@ -117,7 +117,7 @@ def _resolve_team(catalog: PokemonCatalog, names: list[str]) -> Team | dict[str,
         if not isinstance(found, Pokemon):
             return {**found, "name": name}
         members.append(found)
-    return Team(tuple(members))
+    return Team(members=tuple(members))
 
 
 def make_score_tool(catalog: PokemonCatalog) -> Tool:

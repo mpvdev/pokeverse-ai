@@ -1,13 +1,13 @@
 """Deterministic one-on-one matchups between battlers, for pre-battle analysis."""
 
 import math
-from dataclasses import dataclass
 from typing import Any
 
 from pokeverse.battles.battler import Battler
 from pokeverse.battles.damage import damage_range, expected_damage
 from pokeverse.battles.stats import battle_stats
 from pokeverse.catalog import Move
+from pokeverse.model import FrozenModel
 
 
 def _best_move(attacker: Battler, defender: Battler) -> Move:
@@ -21,8 +21,7 @@ def _hits_to_ko(low: int, hp: int) -> int | None:
     return math.ceil(hp / low) if low > 0 else None
 
 
-@dataclass(frozen=True, slots=True)
-class Matchup:
+class Matchup(FrozenModel):
     """A full-HP one-on-one; hit counts use minimum rolls and ignore misses and critical hits."""
 
     attacker: Battler

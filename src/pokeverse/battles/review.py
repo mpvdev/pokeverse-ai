@@ -1,18 +1,17 @@
 """Deterministic review of battle choices: clear-cut mistakes judged from the engine's facts."""
 
 from collections.abc import Iterable
-from dataclasses import dataclass
 from typing import Any, Literal
 
 from pokeverse.battles.damage import damage_range
 from pokeverse.battles.engine import Action, BattleState, Combatant, Player, Switch, UseMove
 from pokeverse.catalog import Move
+from pokeverse.model import FrozenModel
 
 MistakeKind = Literal["missed_ko", "no_effect", "switched_into_ko"]
 
 
-@dataclass(frozen=True, slots=True)
-class Choice:
+class Choice(FrozenModel):
     state: BattleState
     side: int
     options: tuple[Action, ...]
@@ -28,12 +27,11 @@ class RecordingPlayer:
 
     def choose(self, state: BattleState, side: int, options: tuple[Action, ...]) -> Action:
         action = self.inner.choose(state, side, options)
-        self.choices.append(Choice(state, side, options, action))
+        self.choices.append(Choice(state=state, side=side, options=options, action=action))
         return action
 
 
-@dataclass(frozen=True, slots=True)
-class Mistake:
+class Mistake(FrozenModel):
     turn: int
     side: int
     kind: MistakeKind
@@ -95,12 +93,12 @@ def judge(choice: Choice) -> Mistake | None:
     if safe_kos and action not in safe_kos:
         best = moves[safe_kos[0]]
         return Mistake(
-            turn,
-            side,
-            "missed_ko",
-            _label(state, side, action),
-            best.display_name,
-            f"{best.display_name} was a guaranteed KO on {foe.battler.pokemon.display_name} "
+            turn=turn,
+            side=side,
+            kind="missed_ko",
+            chosen=_label(state, side, action),
+            better=best.display_name,
+            detail=f"{best.display_name} was a guaranteed KO on {foe.battler.pokemon.display_name} "
             "that could not miss and landed before it could move.",
         )
 
@@ -109,12 +107,12 @@ def judge(choice: Choice) -> Mistake | None:
         if damaging:
             best_option = max(damaging, key=lambda option: ranges[option][1])
             return Mistake(
-                turn,
-                side,
-                "no_effect",
-                _label(state, side, action),
-                moves[best_option].display_name,
-                f"{moves[action].display_name} has no effect on "
+                turn=turn,
+                side=side,
+                kind="no_effect",
+                chosen=_label(state, side, action),
+                better=moves[best_option].display_name,
+                detail=f"{moves[action].display_name} has no effect on "
                 f"{foe.battler.pokemon.display_name}.",
             )
 
@@ -127,13 +125,15 @@ def judge(choice: Choice) -> Mistake | None:
         ]
         if lethal:
             return Mistake(
-                turn,
-                side,
-                "switched_into_ko",
-                _label(state, side, action),
-                "another option",
-                f"{foe.battler.pokemon.display_name}'s {lethal[0].display_name} is a guaranteed "
-                f"KO on the incoming {incoming.battler.pokemon.display_name}.",
+                turn=turn,
+                side=side,
+                kind="switched_into_ko",
+                chosen=_label(state, side, action),
+                better="another option",
+                detail=(
+                    f"{foe.battler.pokemon.display_name}'s {lethal[0].display_name} is a "
+                    f"guaranteed KO on the incoming {incoming.battler.pokemon.display_name}."
+                ),
             )
     return None
 

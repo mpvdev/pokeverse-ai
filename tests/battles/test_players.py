@@ -1,5 +1,4 @@
 import random
-from dataclasses import replace
 
 import pytest
 
@@ -101,10 +100,10 @@ CHARIZARD_SPECIES = Pokemon(
     learnset=LEARNSET,
 )
 
-GARCHOMP = Battler(GARCHOMP_SPECIES, (EARTHQUAKE, DRAGON_CLAW))
-EARTHQUAKE_ONLY = Battler(GARCHOMP_SPECIES, (EARTHQUAKE,))
-PIKACHU = Battler(PIKACHU_SPECIES, (THUNDERBOLT, QUICK_ATTACK))
-CHARIZARD = Battler(CHARIZARD_SPECIES, (FLAMETHROWER,))
+GARCHOMP = Battler(pokemon=GARCHOMP_SPECIES, moves=(EARTHQUAKE, DRAGON_CLAW))
+EARTHQUAKE_ONLY = Battler(pokemon=GARCHOMP_SPECIES, moves=(EARTHQUAKE,))
+PIKACHU = Battler(pokemon=PIKACHU_SPECIES, moves=(THUNDERBOLT, QUICK_ATTACK))
+CHARIZARD = Battler(pokemon=CHARIZARD_SPECIES, moves=(FLAMETHROWER,))
 
 
 def greedy(state: BattleState, side: int = 0) -> Switch | UseMove:
@@ -112,36 +111,36 @@ def greedy(state: BattleState, side: int = 0) -> Switch | UseMove:
 
 
 def test_greedy_picks_the_most_damaging_move_for_the_current_foe() -> None:
-    assert greedy(start_battle([GARCHOMP], [PIKACHU])) == UseMove(0)
-    assert greedy(start_battle([GARCHOMP], [CHARIZARD])) == UseMove(1)
+    assert greedy(start_battle([GARCHOMP], [PIKACHU])) == UseMove(index=0)
+    assert greedy(start_battle([GARCHOMP], [CHARIZARD])) == UseMove(index=1)
 
 
 def test_greedy_prefers_priority_when_both_moves_finish_the_foe() -> None:
     state = start_battle([PIKACHU], [CHARIZARD])
-    weakened = replace(state.sides[1].current, hp=1)
+    weakened = state.sides[1].current.model_copy(update={"hp": 1})
     state = state.with_side(1, state.sides[1].with_current(weakened))
 
-    assert greedy(state) == UseMove(1)
+    assert greedy(state) == UseMove(index=1)
 
 
 def test_greedy_switches_when_no_move_can_hurt() -> None:
-    assert greedy(start_battle([EARTHQUAKE_ONLY, PIKACHU], [CHARIZARD])) == Switch(1)
+    assert greedy(start_battle([EARTHQUAKE_ONLY, PIKACHU], [CHARIZARD])) == Switch(index=1)
 
 
 def test_greedy_prefers_the_sure_knockout_over_a_stronger_move_that_can_miss() -> None:
     shaky = EARTHQUAKE.model_copy(update={"name": "shaky-quake", "power": 150, "accuracy": 90})
     species = GARCHOMP_SPECIES.model_copy(update={"learnset": LEARNSET | {"shaky-quake"}})
-    state = start_battle([Battler(species, (shaky, EARTHQUAKE))], [PIKACHU])
+    state = start_battle([Battler(pokemon=species, moves=(shaky, EARTHQUAKE))], [PIKACHU])
 
-    assert greedy(state) == UseMove(1)
+    assert greedy(state) == UseMove(index=1)
 
 
 def test_greedy_replaces_a_fainted_battler_with_the_best_attacker() -> None:
     state = start_battle([EARTHQUAKE_ONLY, CHARIZARD, PIKACHU], [CHARIZARD])
-    fainted = replace(state.sides[0].current, hp=0)
+    fainted = state.sides[0].current.model_copy(update={"hp": 0})
     state = state.with_side(0, state.sides[0].with_current(fainted))
 
-    assert greedy(state) == Switch(2)
+    assert greedy(state) == Switch(index=2)
 
 
 def test_random_player_picks_legal_actions_reproducibly() -> None:

@@ -1,16 +1,16 @@
 """Battle stats derived from base stats under the fixed Phase 3 rules."""
 
-from dataclasses import asdict, dataclass
+from functools import cache
 
 from pokeverse.catalog import BaseStats
+from pokeverse.model import FrozenModel
 
 LEVEL = 50
 IV = 31
 EV = 0
 
 
-@dataclass(frozen=True, slots=True)
-class BattleStats:
+class BattleStats(FrozenModel):
     hp: int
     attack: int
     defense: int
@@ -19,13 +19,14 @@ class BattleStats:
     speed: int
 
     def to_dict(self) -> dict[str, int]:
-        return asdict(self)
+        return self.model_dump()
 
 
 def _scaled(base: int) -> int:
     return (2 * base + IV + EV // 4) * LEVEL // 100
 
 
+@cache
 def battle_stats(base: BaseStats) -> BattleStats:
     """Stats at level 50 with 31 IVs, 0 EVs and a neutral nature; base HP 1 (Shedinja) stays 1."""
     return BattleStats(

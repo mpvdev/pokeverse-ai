@@ -104,11 +104,11 @@ CHARIZARD_SPECIES = pokemon(
     BaseStats(hp=78, attack=84, defense=78, special_attack=109, special_defense=85, speed=100),
 )
 
-GARCHOMP = Battler(GARCHOMP_SPECIES, (EARTHQUAKE, STONE_EDGE))
-PIKACHU = Battler(PIKACHU_SPECIES, (THUNDERBOLT, QUICK_ATTACK))
-CHARIZARD = Battler(CHARIZARD_SPECIES, (FLAMETHROWER,))
-ELECTRIC_CHARIZARD = Battler(CHARIZARD_SPECIES, (THUNDERBOLT,))
-EARTHQUAKE_ONLY = Battler(GARCHOMP_SPECIES, (EARTHQUAKE,))
+GARCHOMP = Battler(pokemon=GARCHOMP_SPECIES, moves=(EARTHQUAKE, STONE_EDGE))
+PIKACHU = Battler(pokemon=PIKACHU_SPECIES, moves=(THUNDERBOLT, QUICK_ATTACK))
+CHARIZARD = Battler(pokemon=CHARIZARD_SPECIES, moves=(FLAMETHROWER,))
+ELECTRIC_CHARIZARD = Battler(pokemon=CHARIZARD_SPECIES, moves=(THUNDERBOLT,))
+EARTHQUAKE_ONLY = Battler(pokemon=GARCHOMP_SPECIES, moves=(EARTHQUAKE,))
 
 
 class FixedRng(random.Random):
@@ -155,27 +155,27 @@ def test_team_size_is_checked(size: int) -> None:
 def test_legal_actions_are_moves_and_switches_to_healthy_bench() -> None:
     state = start_battle([GARCHOMP], [PIKACHU, CHARIZARD])
 
-    assert legal_actions(state, 0) == (UseMove(0), UseMove(1))
-    assert legal_actions(state, 1) == (UseMove(0), UseMove(1), Switch(1))
+    assert legal_actions(state, 0) == (UseMove(index=0), UseMove(index=1))
+    assert legal_actions(state, 1) == (UseMove(index=0), UseMove(index=1), Switch(index=1))
 
 
 def test_faster_battler_moves_first_and_a_knocked_out_one_does_not_act() -> None:
     state = start_battle([GARCHOMP], [PIKACHU, CHARIZARD])
 
-    state, events = play_turn(state, (UseMove(0), UseMove(0)), FixedRng(high=False))
+    state, events = play_turn(state, (UseMove(index=0), UseMove(index=0)), FixedRng(high=False))
 
     assert kinds(events) == [("move", "garchomp"), ("damage", "pikachu"), ("faint", "pikachu")]
     assert events[1].damage == 110
     assert events[1].effectiveness == 2.0
     assert state.turn == 1
     assert state.needs_replacement(1)
-    assert legal_actions(state, 1) == (Switch(1),)
+    assert legal_actions(state, 1) == (Switch(index=1),)
 
 
 def test_priority_beats_speed() -> None:
     state = start_battle([GARCHOMP], [PIKACHU])
 
-    _, events = play_turn(state, (UseMove(0), UseMove(1)), FixedRng(high=False))
+    _, events = play_turn(state, (UseMove(index=0), UseMove(index=1)), FixedRng(high=False))
 
     assert events[0].pokemon == "pikachu"
     assert events[0].move == "quick-attack"
@@ -184,7 +184,7 @@ def test_priority_beats_speed() -> None:
 def test_switches_happen_before_moves() -> None:
     state = start_battle([GARCHOMP], [PIKACHU, CHARIZARD])
 
-    state, events = play_turn(state, (UseMove(0), Switch(1)), FixedRng(high=False))
+    state, events = play_turn(state, (UseMove(index=0), Switch(index=1)), FixedRng(high=False))
 
     assert kinds(events) == [
         ("switch", "charizard"),
@@ -197,7 +197,7 @@ def test_switches_happen_before_moves() -> None:
 def test_accuracy_roll_can_miss() -> None:
     state = start_battle([GARCHOMP], [CHARIZARD])
 
-    state, events = play_turn(state, (UseMove(1), UseMove(0)), FixedRng(high=True))
+    state, events = play_turn(state, (UseMove(index=1), UseMove(index=0)), FixedRng(high=True))
 
     assert ("miss", "garchomp") in kinds(events)
     assert state.sides[1].current.hp == state.sides[1].current.max_hp
@@ -207,30 +207,30 @@ def test_speed_ties_are_broken_by_the_rng() -> None:
     first_movers = set()
     for seed in range(20):
         state = start_battle([PIKACHU], [PIKACHU])
-        _, events = play_turn(state, (UseMove(0), UseMove(0)), random.Random(seed))
+        _, events = play_turn(state, (UseMove(index=0), UseMove(index=0)), random.Random(seed))
         first_movers.add(events[0].side)
 
     assert first_movers == {0, 1}
 
 
-@pytest.mark.parametrize("action", [UseMove(2), Switch(0), Switch(1)])
+@pytest.mark.parametrize("action", [UseMove(index=2), Switch(index=0), Switch(index=1)])
 def test_illegal_actions_are_rejected(action: Action) -> None:
     state = start_battle([GARCHOMP], [PIKACHU])
 
     with pytest.raises(IllegalActionError):
-        play_turn(state, (action, UseMove(0)), FixedRng(high=False))
+        play_turn(state, (action, UseMove(index=0)), FixedRng(high=False))
 
 
 def test_turns_wait_for_a_replacement_and_replacements_need_a_faint() -> None:
     state = start_battle([GARCHOMP], [PIKACHU, CHARIZARD])
     with pytest.raises(IllegalActionError, match="no fainted battler"):
-        replace_fainted(state, 1, Switch(1))
+        replace_fainted(state, 1, Switch(index=1))
 
-    state, _ = play_turn(state, (UseMove(0), UseMove(0)), FixedRng(high=False))
+    state, _ = play_turn(state, (UseMove(index=0), UseMove(index=0)), FixedRng(high=False))
     with pytest.raises(IllegalActionError, match="replaced first"):
-        play_turn(state, (UseMove(0), Switch(1)), FixedRng(high=False))
+        play_turn(state, (UseMove(index=0), Switch(index=1)), FixedRng(high=False))
 
-    state, events = replace_fainted(state, 1, Switch(1))
+    state, events = replace_fainted(state, 1, Switch(index=1))
     assert kinds(events) == [("switch", "charizard")]
     assert state.sides[1].current.name == "charizard"
 
@@ -271,19 +271,34 @@ def test_battles_are_reproducible_from_a_seed() -> None:
 def test_illegal_choices_from_players_are_rejected() -> None:
     class Cheater:
         def choose(self, state: BattleState, side: int, options: tuple[Action, ...]) -> Action:
-            return UseMove(3)
+            return UseMove(index=3)
 
     with pytest.raises(IllegalActionError):
         run_battle([GARCHOMP], [PIKACHU], (Cheater(), FirstOption()), random.Random(1))
 
 
 def test_events_describe_themselves() -> None:
-    event = BattleEvent(1, "damage", 1, "pikachu", "earthquake", 110, 0, True, 2.0)
+    event = BattleEvent(
+        turn=1,
+        kind="damage",
+        side=1,
+        pokemon="pikachu",
+        move="earthquake",
+        damage=110,
+        hp=0,
+        critical=True,
+        effectiveness=2.0,
+    )
 
     assert event.describe() == (
         "Pikachu takes 110 damage (0 HP left). A critical hit! It's super effective!"
     )
-    assert BattleEvent(0, "switch", 0, "mr-mime").describe() == "Side 1 sends out Mr Mime."
-    assert BattleEvent(12, "draw").describe() == "The battle ends in a draw after 12 turns."
+    assert (
+        BattleEvent(turn=0, kind="switch", side=0, pokemon="mr-mime").describe()
+        == "Side 1 sends out Mr Mime."
+    )
+    assert (
+        BattleEvent(turn=12, kind="draw").describe() == "The battle ends in a draw after 12 turns."
+    )
     assert event.to_dict()["critical"] is True
-    assert "critical" not in BattleEvent(1, "faint", 1, "pikachu").to_dict()
+    assert "critical" not in BattleEvent(turn=1, kind="faint", side=1, pokemon="pikachu").to_dict()

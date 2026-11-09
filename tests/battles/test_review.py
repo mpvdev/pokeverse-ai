@@ -1,5 +1,3 @@
-from dataclasses import replace
-
 from pokeverse.battles import (
     Action,
     Battler,
@@ -99,21 +97,21 @@ CHARIZARD_SPECIES = Pokemon(
     learnset=LEARNSET,
 )
 
-GARCHOMP = Battler(GARCHOMP_SPECIES, (EARTHQUAKE, DRAGON_CLAW))
-EARTHQUAKE_ONLY = Battler(GARCHOMP_SPECIES, (EARTHQUAKE,))
-SLOW_PIKACHU = Battler(PIKACHU_SPECIES, (THUNDERBOLT,))
-QUICK_PIKACHU = Battler(PIKACHU_SPECIES, (THUNDERBOLT, QUICK_ATTACK))
-CHARIZARD = Battler(CHARIZARD_SPECIES, (FLAMETHROWER,))
+GARCHOMP = Battler(pokemon=GARCHOMP_SPECIES, moves=(EARTHQUAKE, DRAGON_CLAW))
+EARTHQUAKE_ONLY = Battler(pokemon=GARCHOMP_SPECIES, moves=(EARTHQUAKE,))
+SLOW_PIKACHU = Battler(pokemon=PIKACHU_SPECIES, moves=(THUNDERBOLT,))
+QUICK_PIKACHU = Battler(pokemon=PIKACHU_SPECIES, moves=(THUNDERBOLT, QUICK_ATTACK))
+CHARIZARD = Battler(pokemon=CHARIZARD_SPECIES, moves=(FLAMETHROWER,))
 
 
 def choice(state: BattleState, action: Action, side: int = 0) -> Choice:
-    return Choice(state, side, legal_actions(state, side), action)
+    return Choice(state=state, side=side, options=legal_actions(state, side), action=action)
 
 
 def test_missing_a_safe_knockout_is_a_mistake() -> None:
     state = start_battle([GARCHOMP, CHARIZARD], [SLOW_PIKACHU])
 
-    mistake = judge(choice(state, Switch(1)))
+    mistake = judge(choice(state, Switch(index=1)))
 
     assert mistake is not None
     assert (mistake.kind, mistake.turn, mistake.chosen, mistake.better) == (
@@ -122,32 +120,36 @@ def test_missing_a_safe_knockout_is_a_mistake() -> None:
         "switching to Charizard",
         "Earthquake",
     )
-    assert judge(choice(state, UseMove(0))) is None
+    assert judge(choice(state, UseMove(index=0))) is None
 
 
 def test_a_knockout_the_foe_can_outprioritize_is_not_safe() -> None:
     state = start_battle([GARCHOMP, CHARIZARD], [QUICK_PIKACHU])
 
-    assert judge(choice(state, Switch(1))) is None
+    assert judge(choice(state, Switch(index=1))) is None
 
 
 def test_a_knockout_that_can_miss_is_not_safe() -> None:
     shaky = EARTHQUAKE.model_copy(update={"accuracy": 70})
     species = GARCHOMP_SPECIES
-    state = start_battle([Battler(species, (shaky, DRAGON_CLAW)), CHARIZARD], [SLOW_PIKACHU])
+    state = start_battle(
+        [Battler(pokemon=species, moves=(shaky, DRAGON_CLAW)), CHARIZARD], [SLOW_PIKACHU]
+    )
 
-    assert judge(choice(state, Switch(1))) is not None
-    assert judge(choice(state, Switch(1))).better == "Dragon Claw"
+    assert judge(choice(state, Switch(index=1))) is not None
+    assert judge(choice(state, Switch(index=1))).better == "Dragon Claw"
 
     claw_misses = DRAGON_CLAW.model_copy(update={"accuracy": 90})
-    state = start_battle([Battler(species, (shaky, claw_misses)), CHARIZARD], [SLOW_PIKACHU])
-    assert judge(choice(state, Switch(1))) is None
+    state = start_battle(
+        [Battler(pokemon=species, moves=(shaky, claw_misses)), CHARIZARD], [SLOW_PIKACHU]
+    )
+    assert judge(choice(state, Switch(index=1))) is None
 
 
 def test_using_a_move_with_no_effect_is_a_mistake() -> None:
     state = start_battle([GARCHOMP], [CHARIZARD])
 
-    mistake = judge(choice(state, UseMove(0)))
+    mistake = judge(choice(state, UseMove(index=0)))
 
     assert mistake is not None
     assert (mistake.kind, mistake.better) == ("no_effect", "Dragon Claw")
@@ -157,13 +159,13 @@ def test_using_a_move_with_no_effect_is_a_mistake() -> None:
 def test_no_effect_is_not_a_mistake_without_a_damaging_alternative() -> None:
     state = start_battle([EARTHQUAKE_ONLY], [CHARIZARD])
 
-    assert judge(choice(state, UseMove(0))) is None
+    assert judge(choice(state, UseMove(index=0))) is None
 
 
 def test_switching_into_a_guaranteed_knockout_is_a_mistake() -> None:
     state = start_battle([GARCHOMP, SLOW_PIKACHU], [EARTHQUAKE_ONLY])
 
-    mistake = judge(choice(state, Switch(1)))
+    mistake = judge(choice(state, Switch(index=1)))
 
     assert mistake is not None
     assert mistake.kind == "switched_into_ko"
@@ -172,10 +174,10 @@ def test_switching_into_a_guaranteed_knockout_is_a_mistake() -> None:
 
 def test_forced_replacements_are_not_judged() -> None:
     state = start_battle([SLOW_PIKACHU, GARCHOMP], [EARTHQUAKE_ONLY])
-    fainted = state.sides[0].with_current(replace(state.sides[0].current, hp=0))
+    fainted = state.sides[0].with_current(state.sides[0].current.model_copy(update={"hp": 0}))
     state = state.with_side(0, fainted)
 
-    assert judge(choice(state, Switch(1))) is None
+    assert judge(choice(state, Switch(index=1))) is None
 
 
 def test_recording_player_keeps_every_choice_for_review() -> None:
@@ -184,7 +186,9 @@ def test_recording_player_keeps_every_choice_for_review() -> None:
 
     action = recorder.choose(state, 0, legal_actions(state, 0))
 
-    assert action == UseMove(1)
-    assert recorder.choices == [Choice(state, 0, legal_actions(state, 0), UseMove(1))]
+    assert action == UseMove(index=1)
+    assert recorder.choices == [
+        Choice(state=state, side=0, options=legal_actions(state, 0), action=UseMove(index=1))
+    ]
     assert find_mistakes(recorder.choices) == ()
-    assert len(find_mistakes([choice(state, UseMove(0))])) == 1
+    assert len(find_mistakes([choice(state, UseMove(index=0))])) == 1

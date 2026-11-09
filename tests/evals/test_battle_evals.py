@@ -43,7 +43,7 @@ FLAMETHROWER = Move(
 LEARNSET = frozenset({"earthquake", "dragon-claw", "flamethrower"})
 
 GARCHOMP = Battler(
-    Pokemon(
+    pokemon=Pokemon(
         pokedex_id=445,
         name="garchomp",
         types=(T.DRAGON, T.GROUND),
@@ -52,10 +52,10 @@ GARCHOMP = Battler(
         ),
         learnset=LEARNSET,
     ),
-    (EARTHQUAKE, DRAGON_CLAW),
+    moves=(EARTHQUAKE, DRAGON_CLAW),
 )
 CHARIZARD = Battler(
-    Pokemon(
+    pokemon=Pokemon(
         pokedex_id=6,
         name="charizard",
         types=(T.FIRE, T.FLYING),
@@ -64,11 +64,11 @@ CHARIZARD = Battler(
         ),
         learnset=LEARNSET,
     ),
-    (FLAMETHROWER,),
+    moves=(FLAMETHROWER,),
 )
 TEAM = [GARCHOMP]
 OPPONENT = [CHARIZARD]
-CLAW_ONLY = Battler(GARCHOMP.pokemon, (DRAGON_CLAW,))
+CLAW_ONLY = Battler(pokemon=GARCHOMP.pokemon, moves=(DRAGON_CLAW,))
 
 
 class ScriptedChat:

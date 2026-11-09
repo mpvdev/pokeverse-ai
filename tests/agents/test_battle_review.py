@@ -7,8 +7,22 @@ from pokeverse.catalog import BaseStats, DamageClass, Move, Pokemon, PokemonType
 from pokeverse.llm import Completion
 
 MISTAKES = (
-    Mistake(3, 0, "no_effect", "Earthquake", "Dragon Claw", "Earthquake has no effect."),
-    Mistake(5, 0, "missed_ko", "Outrage", "Volt Tackle", "Volt Tackle was a guaranteed KO."),
+    Mistake(
+        turn=3,
+        side=0,
+        kind="no_effect",
+        chosen="Earthquake",
+        better="Dragon Claw",
+        detail="Earthquake has no effect.",
+    ),
+    Mistake(
+        turn=5,
+        side=0,
+        kind="missed_ko",
+        chosen="Outrage",
+        better="Volt Tackle",
+        detail="Volt Tackle was a guaranteed KO.",
+    ),
 )
 
 
@@ -108,7 +122,7 @@ def test_strategy_agent_appends_lessons_to_every_prompt() -> None:
         ),
         learnset=frozenset({"earthquake", "dragon-claw"}),
     )
-    garchomp = Battler(species, (earthquake, claw))
+    garchomp = Battler(pokemon=species, moves=(earthquake, claw))
 
     class Recorder:
         prompts: list[str] = []

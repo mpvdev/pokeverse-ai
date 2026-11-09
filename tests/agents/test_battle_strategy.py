@@ -1,6 +1,5 @@
 import random
 from collections.abc import Callable
-from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -82,7 +81,7 @@ LEARNSET = frozenset(
     move.name for move in (EARTHQUAKE, DRAGON_CLAW, THUNDERBOLT, QUICK_ATTACK, FLAMETHROWER)
 )
 GARCHOMP = Battler(
-    Pokemon(
+    pokemon=Pokemon(
         pokedex_id=445,
         name="garchomp",
         types=(T.DRAGON, T.GROUND),
@@ -91,10 +90,10 @@ GARCHOMP = Battler(
         ),
         learnset=LEARNSET,
     ),
-    (EARTHQUAKE, DRAGON_CLAW),
+    moves=(EARTHQUAKE, DRAGON_CLAW),
 )
 PIKACHU = Battler(
-    Pokemon(
+    pokemon=Pokemon(
         pokedex_id=25,
         name="pikachu",
         types=(T.ELECTRIC,),
@@ -103,10 +102,10 @@ PIKACHU = Battler(
         ),
         learnset=LEARNSET,
     ),
-    (THUNDERBOLT, QUICK_ATTACK),
+    moves=(THUNDERBOLT, QUICK_ATTACK),
 )
 CHARIZARD = Battler(
-    Pokemon(
+    pokemon=Pokemon(
         pokedex_id=6,
         name="charizard",
         types=(T.FIRE, T.FLYING),
@@ -115,7 +114,7 @@ CHARIZARD = Battler(
         ),
         learnset=LEARNSET,
     ),
-    (FLAMETHROWER,),
+    moves=(FLAMETHROWER,),
 )
 
 
@@ -174,7 +173,7 @@ def test_situation_flags_knockouts() -> None:
 
 def faint_active(state: BattleState, side: int) -> BattleState:
     own = state.sides[side]
-    return state.with_side(side, own.with_current(replace(own.current, hp=0)))
+    return state.with_side(side, own.with_current(own.current.model_copy(update={"hp": 0})))
 
 
 def test_replacement_situation_says_the_newcomer_is_not_attacked() -> None:
@@ -194,7 +193,7 @@ def test_agent_uses_the_models_choice_with_a_per_turn_enum_schema() -> None:
 
     action = agent.choose(state, 0, legal_actions(state, 0))
 
-    assert action == UseMove(1)
+    assert action == UseMove(index=1)
     (call,) = chat.calls
     assert call["system"] == BATTLE_STRATEGY_SYSTEM_PROMPT
     schema = call["output_schema"].schema
@@ -218,7 +217,7 @@ def test_a_single_legal_option_needs_no_model_call() -> None:
     agent = BattleStrategyAgent(chat)
     state = start_battle([CHARIZARD], [GARCHOMP])
 
-    assert agent.choose(state, 0, legal_actions(state, 0)) == UseMove(0)
+    assert agent.choose(state, 0, legal_actions(state, 0)) == UseMove(index=0)
     assert chat.calls == []
     assert agent.decisions[0].reason == "Only legal option."
 
@@ -267,5 +266,5 @@ def test_forced_replacement_decision_is_recorded_on_the_current_turn() -> None:
     agent = BattleStrategyAgent(ScriptedChat(pick=lambda ids: ids[-1]))
     state = faint_active(start_battle([GARCHOMP], [PIKACHU, CHARIZARD, GARCHOMP]), 1)
 
-    assert agent.choose(state, 1, legal_actions(state, 1)) == Switch(2)
+    assert agent.choose(state, 1, legal_actions(state, 1)) == Switch(index=2)
     assert agent.decisions[0].turn == state.turn

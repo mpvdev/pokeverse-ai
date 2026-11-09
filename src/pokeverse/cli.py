@@ -736,7 +736,7 @@ def team_command(
     try:
         with open_catalog(settings) as catalog:
             members = tuple(catalog.get(normalize_identifier(name)) for name in names)
-        analysis = analyze_team(Team(members))
+        analysis = analyze_team(Team(members=members))
     except ValueError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
     except PokemonNotInCatalogError as error:
@@ -816,7 +816,7 @@ def optimize_command(
         with llm_errors():
             chat = OpenAIChat(LlmSettings.from_env())
             with open_catalog(settings) as catalog:
-                team = Team(tuple(catalog.get(normalize_identifier(n)) for n in names))
+                team = Team(members=tuple(catalog.get(normalize_identifier(n)) for n in names))
                 result = TeamOptimizationAgent(chat, catalog).optimize(
                     team, goal=goal, keep=keep or (), notes=notes
                 )

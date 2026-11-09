@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from pokeverse.catalog import BaseStats, Pokemon, PokemonType
 from pokeverse.teams import Team
@@ -10,7 +11,7 @@ CHARIZARD = Pokemon(pokedex_id=6, name="charizard", types=(T.FIRE, T.FLYING), st
 
 
 def test_team_keeps_member_order() -> None:
-    team = Team((PIKACHU, CHARIZARD))
+    team = Team(members=(PIKACHU, CHARIZARD))
 
     assert team.names == ("pikachu", "charizard")
     assert team.to_dict() == {
@@ -23,11 +24,11 @@ def test_full_team_of_six_is_allowed() -> None:
         Pokemon(pokedex_id=i, name=f"mon-{i}", types=(T.NORMAL,), stats=STATS) for i in range(1, 7)
     )
 
-    assert len(Team(members).members) == 6
+    assert len(Team(members=members).members) == 6
 
 
 def test_same_species_may_appear_more_than_once() -> None:
-    team = Team((PIKACHU, CHARIZARD, PIKACHU))
+    team = Team(members=(PIKACHU, CHARIZARD, PIKACHU))
 
     assert team.names == ("pikachu", "charizard", "pikachu")
 
@@ -43,10 +44,16 @@ def test_same_species_may_appear_more_than_once() -> None:
             ),
             "between 1 and 6",
         ),
-        ([PIKACHU], "tuple"),
-        (("pikachu",), "must be Pokemon"),
     ],
 )
 def test_invalid_teams_are_rejected(members: object, message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        Team(members)  # type: ignore[arg-type]
+        Team(members=members)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("members", [[PIKACHU], ("pikachu",)])
+def test_members_must_be_a_tuple_of_pokemon(members: object) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        Team(members=members)  # type: ignore[arg-type]
+
+    assert excinfo.value.errors()[0]["loc"][0] == "members"

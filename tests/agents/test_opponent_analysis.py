@@ -1,4 +1,3 @@
-from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -48,7 +47,7 @@ FLAMETHROWER = Move(
 LEARNSET = frozenset({"earthquake", "thunderbolt", "flamethrower"})
 
 GARCHOMP = Battler(
-    Pokemon(
+    pokemon=Pokemon(
         pokedex_id=445,
         name="garchomp",
         types=(T.DRAGON, T.GROUND),
@@ -57,10 +56,10 @@ GARCHOMP = Battler(
         ),
         learnset=LEARNSET,
     ),
-    (EARTHQUAKE,),
+    moves=(EARTHQUAKE,),
 )
 PIKACHU = Battler(
-    Pokemon(
+    pokemon=Pokemon(
         pokedex_id=25,
         name="pikachu",
         types=(T.ELECTRIC,),
@@ -69,10 +68,10 @@ PIKACHU = Battler(
         ),
         learnset=LEARNSET,
     ),
-    (THUNDERBOLT,),
+    moves=(THUNDERBOLT,),
 )
 CHARIZARD = Battler(
-    Pokemon(
+    pokemon=Pokemon(
         pokedex_id=6,
         name="charizard",
         types=(T.FIRE, T.FLYING),
@@ -81,7 +80,7 @@ CHARIZARD = Battler(
         ),
         learnset=LEARNSET,
     ),
-    (FLAMETHROWER,),
+    moves=(FLAMETHROWER,),
 )
 
 OWN = [GARCHOMP, PIKACHU]
@@ -183,8 +182,8 @@ def test_every_foe_must_be_ranked_exactly_once(threats: list[dict[str, str]]) ->
 def faint(state: BattleState, side: int, slot: int) -> BattleState:
     own = state.sides[side]
     team = list(own.team)
-    team[slot] = replace(team[slot], hp=0)
-    return state.with_side(side, replace(own, team=tuple(team)))
+    team[slot] = team[slot].model_copy(update={"hp": 0})
+    return state.with_side(side, own.model_copy(update={"team": tuple(team)}))
 
 
 def analysis() -> OpponentAnalysis:

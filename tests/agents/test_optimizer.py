@@ -24,7 +24,7 @@ GOUGING_FIRE = Pokemon(pokedex_id=1020, name="gouging-fire", types=(T.FIRE, T.DR
 VOLCANION = Pokemon(pokedex_id=721, name="volcanion", types=(T.FIRE, T.WATER), stats=STATS)
 ARCANINE = Pokemon(pokedex_id=59, name="arcanine", types=(T.FIRE,), stats=STATS)
 CORVIKNIGHT = Pokemon(pokedex_id=823, name="corviknight", types=(T.FLYING, T.STEEL), stats=STATS)
-FIRE_TEAM = Team((RESHIRAM, TURTONATOR, GOUGING_FIRE, VOLCANION))
+FIRE_TEAM = Team(members=(RESHIRAM, TURTONATOR, GOUGING_FIRE, VOLCANION))
 
 
 class ScriptedChat:
@@ -128,7 +128,7 @@ def test_swaps_apply_in_sequence(catalog: PokemonCatalog) -> None:
 
 
 def test_claims_are_checked_against_the_type_chart(catalog: PokemonCatalog) -> None:
-    team = Team((CORVIKNIGHT,))
+    team = Team(members=(CORVIKNIGHT,))
     claims = [
         ("corviknight", "ice", "resists"),
         ("corviknight", "ground", "immune"),

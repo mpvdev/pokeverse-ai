@@ -5,13 +5,17 @@ from pokeverse.catalog import BaseStats
 def test_garchomp_level_50_stats() -> None:
     assert battle_stats(
         BaseStats(hp=108, attack=130, defense=95, special_attack=80, special_defense=85, speed=102)
-    ) == BattleStats(183, 150, 115, 100, 105, 122)
+    ) == BattleStats(
+        hp=183, attack=150, defense=115, special_attack=100, special_defense=105, speed=122
+    )
 
 
 def test_pikachu_level_50_stats() -> None:
     assert battle_stats(
         BaseStats(hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=90)
-    ) == BattleStats(110, 75, 60, 70, 70, 110)
+    ) == BattleStats(
+        hp=110, attack=75, defense=60, special_attack=70, special_defense=70, speed=110
+    )
 
 
 def test_highest_and_lowest_base_stats() -> None:

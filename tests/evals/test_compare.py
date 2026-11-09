@@ -43,7 +43,7 @@ TEAM_CASE = CompareCase(
     max_vulnerabilities=0,
 )
 # Empoleon (Water/Steel) takes 1/4 from Ice and resists Dragon; Clefable is immune to Dragon.
-GOOD_TEAM = Team((GARCHOMP, EMPOLEON, CLEFABLE))
+GOOD_TEAM = Team(members=(GARCHOMP, EMPOLEON, CLEFABLE))
 GOOD_ANSWER = "Garchomp takes 4× from Ice. Team: Garchomp, Empoleon, Clefable."
 
 
@@ -60,10 +60,10 @@ def test_good_team_passes() -> None:
     [
         ("Garchomp is weak to Ice.", GOOD_TEAM, "does not match"),
         (GOOD_ANSWER, None, "no team produced"),
-        (GOOD_ANSWER, Team((GARCHOMP, EMPOLEON)), "team has 2 members, expected 3"),
-        (GOOD_ANSWER, Team((CLEFABLE, EMPOLEON, ARCANINE)), "team is missing ['garchomp']"),
-        (GOOD_ANSWER, Team((GARCHOMP, CORVIKNIGHT, CLEFABLE)), "nobody resists ice"),
-        (GOOD_ANSWER, Team((GARCHOMP, FLYGON, EMPOLEON)), "vulnerabilities > 0"),
+        (GOOD_ANSWER, Team(members=(GARCHOMP, EMPOLEON)), "team has 2 members, expected 3"),
+        (GOOD_ANSWER, Team(members=(CLEFABLE, EMPOLEON, ARCANINE)), "team is missing ['garchomp']"),
+        (GOOD_ANSWER, Team(members=(GARCHOMP, CORVIKNIGHT, CLEFABLE)), "nobody resists ice"),
+        (GOOD_ANSWER, Team(members=(GARCHOMP, FLYGON, EMPOLEON)), "vulnerabilities > 0"),
         ("Garchomp takes 4× from Ice. Team: Garchomp, Clefable.", GOOD_TEAM, "empoleon"),
     ],
 )
@@ -76,7 +76,7 @@ def test_check_reports_failures(answer: str, team: Team | None, failure: str) ->
 def test_only_types() -> None:
     case = CompareCase("f", "q", team_size=2, only_types=frozenset({T.FIRE}))
 
-    failures = run_check(case, "Arcanine and Garchomp.", Team((ARCANINE, GARCHOMP)))
+    failures = run_check(case, "Arcanine and Garchomp.", Team(members=(ARCANINE, GARCHOMP)))
 
     assert failures == ("members outside the allowed types: ['garchomp']",)
 

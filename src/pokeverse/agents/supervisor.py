@@ -190,7 +190,9 @@ class Supervisor:
         self, members: list[str], goal: str, keep: list[str], notes: str, context: SharedContext
     ) -> Any:
         try:
-            team = Team(tuple(self._catalog.get(normalize_identifier(name)) for name in members))
+            team = Team(
+                members=tuple(self._catalog.get(normalize_identifier(name)) for name in members)
+            )
         except PokemonNotInCatalogError as error:
             raise ValueError(f"cannot optimize: {error}") from error
         return self._optimizer.optimize(

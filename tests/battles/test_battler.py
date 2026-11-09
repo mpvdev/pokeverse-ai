@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 
 from pokeverse.battles import Battler, load_battler
 from pokeverse.catalog import (
@@ -130,7 +131,7 @@ PIKACHU = Pokemon(
 
 
 def test_battler_with_four_moves() -> None:
-    battler = Battler(PIKACHU, (THUNDERBOLT, QUICK_ATTACK, IRON_TAIL, SURF))
+    battler = Battler(pokemon=PIKACHU, moves=(THUNDERBOLT, QUICK_ATTACK, IRON_TAIL, SURF))
 
     assert [move.name for move in battler.moves] == [
         "thunderbolt",
@@ -147,8 +148,6 @@ def test_battler_with_four_moves() -> None:
     [
         ((), "between 1 and 4"),
         ((THUNDERBOLT, QUICK_ATTACK, IRON_TAIL, SURF, VOLT_TACKLE), "between 1 and 4"),
-        ([THUNDERBOLT], "tuple of Move"),
-        (("thunderbolt",), "tuple of Move"),
         ((THUNDERBOLT, THUNDERBOLT), "duplicates"),
         ((THUNDERBOLT, FLAMETHROWER), "pikachu cannot learn: flamethrower"),
         ((THUNDER_WAVE,), "not supported in battle: thunder-wave"),
@@ -158,12 +157,20 @@ def test_battler_with_four_moves() -> None:
 )
 def test_invalid_battler_is_rejected(moves: Any, message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        Battler(PIKACHU, moves)
+        Battler(pokemon=PIKACHU, moves=moves)
+
+
+@pytest.mark.parametrize("moves", [[THUNDERBOLT], ("thunderbolt",)])
+def test_moves_must_be_a_tuple_of_moves(moves: Any) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        Battler(pokemon=PIKACHU, moves=moves)
+
+    assert excinfo.value.errors()[0]["loc"][0] == "moves"
 
 
 def test_pokemon_must_be_a_pokemon() -> None:
     with pytest.raises(ValueError, match="Pokemon"):
-        Battler(cast(Any, "pikachu"), (THUNDERBOLT,))
+        Battler(pokemon=cast(Any, "pikachu"), moves=(THUNDERBOLT,))
 
 
 class FakeSource:

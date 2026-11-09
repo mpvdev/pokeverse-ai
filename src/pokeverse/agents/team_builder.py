@@ -165,4 +165,4 @@ class TeamCompositionAgent:
             raise LlmRequestError(
                 f"Agent proposed a Pokémon that does not exist: {error}", completion=completion
             ) from error
-        return TeamBuildResult(proposal, analyze_team(Team(members)), completion)
+        return TeamBuildResult(proposal, analyze_team(Team(members=members)), completion)

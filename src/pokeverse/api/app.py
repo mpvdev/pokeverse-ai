@@ -9,6 +9,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from pydantic import BeforeValidator, ValidationError
 
 from pokeverse.agents import normalize_identifier
 from pokeverse.catalog import (
@@ -49,6 +50,38 @@ def identifier(name_or_id: str) -> str | int:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
 
 
+def _name_or_id(value: object) -> str | int:
+    if isinstance(value, bool) or not isinstance(value, str | int):
+        raise ValueError("expected a name or a positive id")
+    return parse_identifier(normalize_identifier(value) if isinstance(value, str) else value)
+
+
+def _move_name(value: object) -> str | int:
+    name = _name_or_id(value)
+    if isinstance(name, int):
+        raise ValueError("moves must be given by name")
+    return name
+
+
+NameOrId = Annotated[str | int, BeforeValidator(_name_or_id)]
+MoveName = Annotated[str, BeforeValidator(_move_name)]
+
+
+def message(error: ValueError) -> str:
+    if isinstance(error, ValidationError):
+        return "; ".join(e["msg"].removeprefix("Value error, ") for e in error.errors())
+    return str(error)
+
+
+@contextmanager
+def invalid_input() -> Iterator[None]:
+    """Domain rule violations (e.g. an unlearnable move) become 422 responses."""
+    try:
+        yield
+    except ValueError as error:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, message(error)) from error
+
+
 Catalogs = Annotated[CatalogProvider, Depends(get_catalogs)]
 Identifier = Annotated[str | int, Depends(identifier)]
 
@@ -65,7 +98,9 @@ async def catalog_error(request: Request, error: Exception) -> JSONResponse:
 
 
 def create_app(catalogs: CatalogProvider | None = None) -> FastAPI:
+    from pokeverse.api.battles import router as battles_router
     from pokeverse.api.catalog import router as catalog_router
+    from pokeverse.api.teams import router as teams_router
 
     app = FastAPI(
         title="PokéVerse AI",
@@ -81,6 +116,8 @@ def create_app(catalogs: CatalogProvider | None = None) -> FastAPI:
         return {"status": "ok", "version": version("pokeverse-ai")}
 
     app.include_router(catalog_router)
+    app.include_router(teams_router)
+    app.include_router(battles_router)
     return app
 
 

@@ -9,7 +9,7 @@ VENUSAUR = Pokemon(pokedex_id=3, name="venusaur", types=(T.GRASS, T.POISON), sta
 GARCHOMP = Pokemon(pokedex_id=445, name="garchomp", types=(T.DRAGON, T.GROUND), stats=STATS)
 FLYGON = Pokemon(pokedex_id=330, name="flygon", types=(T.GROUND, T.DRAGON), stats=STATS)
 LAPRAS = Pokemon(pokedex_id=131, name="lapras", types=(T.WATER, T.ICE), stats=STATS)
-STARTERS = Team((CHARIZARD, BLASTOISE, VENUSAUR))
+STARTERS = Team(members=(CHARIZARD, BLASTOISE, VENUSAUR))
 
 
 def test_exposure_lists_every_attacking_type() -> None:
@@ -47,7 +47,7 @@ def test_offensive_gaps_use_own_types_only() -> None:
 
 
 def test_single_weak_member_is_not_a_vulnerability() -> None:
-    analysis = analyze_team(Team((GARCHOMP,)))
+    analysis = analyze_team(Team(members=(GARCHOMP,)))
 
     assert analysis.vulnerabilities == ()
     ice = analysis.exposures[list(PokemonType).index(T.ICE)]
@@ -56,7 +56,7 @@ def test_single_weak_member_is_not_a_vulnerability() -> None:
 
 def test_weak_members_must_outnumber_cover() -> None:
     # Ice is 4x on both Dragon/Ground members; Blastoise resists it: 2 weak > 1 cover.
-    analysis = analyze_team(Team((GARCHOMP, FLYGON, BLASTOISE)))
+    analysis = analyze_team(Team(members=(GARCHOMP, FLYGON, BLASTOISE)))
 
     ice = next(e for e in analysis.vulnerabilities if e.attacking_type is T.ICE)
     assert ice.weak == ("garchomp", "flygon")
@@ -64,14 +64,14 @@ def test_weak_members_must_outnumber_cover() -> None:
 
 
 def test_equal_weak_and_cover_is_not_a_vulnerability() -> None:
-    analysis = analyze_team(Team((GARCHOMP, FLYGON, BLASTOISE, LAPRAS)))
+    analysis = analyze_team(Team(members=(GARCHOMP, FLYGON, BLASTOISE, LAPRAS)))
 
     assert T.ICE not in [e.attacking_type for e in analysis.vulnerabilities]
 
 
 def test_score_orders_by_vulnerabilities_then_exposure_then_coverage() -> None:
     assert analyze_team(STARTERS).score == (1, 2, 8, 8)
-    worse = analyze_team(Team((GARCHOMP, FLYGON, BLASTOISE)))
+    worse = analyze_team(Team(members=(GARCHOMP, FLYGON, BLASTOISE)))
     assert worse.score > analyze_team(STARTERS).score
 
 

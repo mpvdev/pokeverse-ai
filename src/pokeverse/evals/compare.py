@@ -158,7 +158,7 @@ def _resolve(catalog: PokemonCatalog, names: list[str]) -> Team | str:
     if not names:
         return "no team produced"
     try:
-        return Team(tuple(catalog.get(normalize_identifier(n)) for n in names))
+        return Team(members=tuple(catalog.get(normalize_identifier(n)) for n in names))
     except (PokemonNotInCatalogError, ValueError) as error:
         return f"invalid team {names}: {error}"
 

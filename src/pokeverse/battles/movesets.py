@@ -68,4 +68,4 @@ def default_battler(catalog: PokemonCatalog, pokemon: str | int) -> Battler:
     chosen = choose_moveset(species, moves)
     if not chosen:
         raise ValueError(f"{species.name} has no moves usable in battle")
-    return Battler(species, chosen)
+    return Battler(pokemon=species, moves=chosen)

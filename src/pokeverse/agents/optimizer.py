@@ -265,7 +265,7 @@ class TeamOptimizationAgent:
             return reject(f"could not look up {into!r}: {error}")
         members = list(current.team.members)
         members[names.index(out)] = newcomer
-        candidate = analyze_team(Team(tuple(members)))
+        candidate = analyze_team(Team(members=tuple(members)))
         if candidate.score >= current.score:
             return reject(f"no improvement: score {current.score} -> {candidate.score}")
         verdict_text = f"improved: score {current.score} -> {candidate.score}"
