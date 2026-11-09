@@ -11,7 +11,7 @@ PokéAPI (upstream, import only)
 PokéAPI client ──> local catalog (SQLite: Pokémon, types, base stats, learnsets, moves)
                         │  PokemonCatalog (local-first)
                         v
-deterministic core: type chart, team analysis, battlers, battle stats and damage
+deterministic core: type chart, team analysis, battlers, battle stats, damage, battle engine
                         │  read-only tools
                         v
 agents (LLM): Research, Team Composition, Team Optimization, Supervisor
@@ -52,7 +52,8 @@ pokeverse-ai/
 │   ├── battles/
 │   │   ├── battler.py     # Battler (Pokémon + 1-4 validated moves), load_battler
 │   │   ├── stats.py       # level-50 BattleStats from base stats
-│   │   └── damage.py      # Gen 6+ damage formula, ranges, seeded rolls
+│   │   ├── damage.py      # Gen 6+ damage formula, ranges, seeded rolls
+│   │   └── engine.py      # BattleState, legal actions, turns, run_battle, events
 │   ├── catalog/
 │   │   ├── __init__.py    # Public catalog API (re-exports models, catalog, errors)
 │   │   ├── models.py      # Pokemon, BaseStats, Move, DamageClass, PokemonType, parse_identifier
@@ -96,6 +97,7 @@ pokeverse-ai/
 | Teams | `pokeverse.teams` | Application state, separate from reference data. `Team`: immutable 1–6 Pokémon; the same species may repeat, and each copy counts as a separate member in the analysis. `analyze_team(team)` → `TeamAnalysis`: per-attacking-type exposure (weak / resists / immune members), `vulnerabilities` (≥2 weak and weak outnumber cover), `unresisted` types, STAB-only `offensive_gaps`, and a comparable `score` tuple (lower is better). Pure code over the type chart; agents will read it rather than judge teams themselves. |
 | Battlers | `pokeverse.battles` | `Battler`: an immutable Pokémon plus 1–4 distinct moves, each in its learnset and with a fixed power (status and fixed-damage moves are rejected until the engine supports them). `load_battler(catalog, pokemon, moves)` checks the move count and learnset before fetching move details. |
 | Battle stats and damage | `pokeverse.battles.stats`, `pokeverse.battles.damage` | Pure functions. `battle_stats` derives level-50 stats (31 IVs, 0 EVs, neutral nature). `calculate_damage` implements the Gen 6+ formula in Pokémon Showdown's integer order (base damage, critical ×1.5, roll 85–100%, STAB ×1.5 rounded half down, type effectiveness, minimum 1 unless immune); `damage_range` gives min/max without a critical hit; `roll_damage` draws the critical hit (1 in 24) and roll from an injected `random.Random`, so battles can be replayed from a seed. |
+| Battle engine | `pokeverse.battles.engine` | Singles battles between two teams of 1–6 battlers as pure transitions over immutable `BattleState` (two `Side`s of `Combatant`s with current HP). `legal_actions` lists `UseMove`/`Switch` choices and every choice is validated against it (`IllegalActionError`). `play_turn`: switches first, then moves by priority, speed and a seeded tie-break; immunity before the accuracy roll; knocked-out battlers do not act. `replace_fainted` handles forced switches. `run_battle` drives two `Player`s (protocol: `choose(state, side, options)`) to a win or a draw at `MAX_TURNS` and returns structured `BattleEvent`s. PP is not tracked. |
 | Team Composition Agent | `pokeverse.agents.team_builder` | `TeamCompositionAgent.build(request)`: free-text request → `TeamProposal` (members with roles, summary) using `get_pokemon`, `get_type_matchups` and `analyze_team` (from `make_team_tools`), with a larger tool-round and token budget than research. The result (`TeamBuildResult`) is re-checked by code: members resolved through the catalog (invented Pokémon rejected), analysis recomputed, and `self_checked` reports whether the agent analyzed exactly the final team. |
 | Supervisor | `pokeverse.agents.supervisor` | `Supervisor.run(request)`: an LLM whose tools are the specialist agents (`ask_research_agent`, `ask_team_builder`, each taking a self-contained `task`). It never answers Pokémon facts itself and composes its answer from specialist results. Each tool call runs the real specialist (with its own prompt, tools and validation) and returns its `to_dict()`; specialist failures come back as error data. `SupervisorResult` holds the answer, the observed `Delegation` trace and the supervisor/specialist token split. `optimize` mode: `never` (no optimizer tool), `auto` (default: after a successful build, code runs the optimizer only if the team has vulnerabilities, with the user's required members as `keep`; the builder's tool result then includes `optimization`), `always` (the supervisor is instructed to optimize every built team). |
 | Shared context | `pokeverse.agents.context` | `SharedContext`, one per supervised request: records verified facts from specialists' tool outputs only (never model prose) and renders them as a "Verified facts" block appended to the next specialist's task. Each `Delegation` records its `handoff`; Pokémon handed over count as grounded for the Research Agent. |
