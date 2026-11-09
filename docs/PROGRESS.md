@@ -2,7 +2,7 @@
 
 ## Current Phase
 
-**Phase 3.5 — REST API** (in progress). Phase 4 — Persistent Pokémon World is paused. Phase 3 is complete on branch `phase-3`.
+**Phase 4 — Persistent Pokémon World** (not started). Phase 3.5 — REST API is complete on branch `phase-3.5`.
 
 ## Phase 3.5 Plan — REST API (interim phase)
 
@@ -21,8 +21,15 @@ Goal: replace the CLI with a FastAPI service; all domain models become pydantic 
 - [x] Step 2: FastAPI foundation and catalog endpoints — `pokeverse.api`: `create_app(catalogs=None)` app factory plus a module-level `app`, served with the FastAPI CLI (`fastapi dev` / `fastapi run`, entrypoint in `[tool.fastapi]`); the catalog is injected as a provider (a context manager yielding a `PokemonCatalog`) stored on `app.state`, so tests swap in a temp database and a mocked PokeAPI. The SQLite catalog is opened per request in the handler's thread, because SQLite connections belong to the thread that opened them. Endpoints: `GET /health`, `/pokemon?limit=&offset=` (one page of the PokéAPI index: names and ids, 1–100 per page), `/pokemon/{name_or_id}`, `/pokemon/{name_or_id}/learnset`, `/moves/{name_or_id}`. **Catalog policy changed (D48, supersedes D12): PokéAPI is now the source of truth for every read** — `PokemonCatalog` always fetches from the upstream and syncs the result to SQLite, which is a write-only mirror and never read; within one catalog instance (one request or CLI command) each record is fetched once and reused, so default movesets do not refetch the same move. An upstream outage now fails lookups (503 / exit 3) even for previously synced data; offline mode (`--offline`, `?offline=true`, `PokemonCatalog(repository)` without a source) is removed, and the CLI `list` shows the PokéAPI index (`--limit`, `--offset`). Tests build catalogs over `StaticSource` (fixed in-memory records) instead of seeding SQLite. Path identifiers are normalized like CLI and agent input (`Mr. Mime` → `mr-mime`, `#025` → 25); invalid ones are 422 before any lookup. Errors: not in catalog → 404, upstream unavailable → 503, both as `{"detail": ...}`. Responses are the pydantic models themselves, so OpenAPI schemas come from them; `Pokemon.stats` serializes as `base_stats` (alias) and `to_dict()` now delegates to `model_dump`, keeping one canonical JSON shape (D15). `default_db_path` moved to `pokeverse.paths` so the API and CLI share it. Dependencies added: `fastapi>=0.162` and `fastapi-cli>=0.0.32` (the CLI alone rather than `fastapi[standard]`, which would also pull in the FastAPI Cloud CLI and OpenTelemetry exporters; it brings `uvicorn[standard]`, whose compiled extras install on Python 3.15). 19 API tests via `TestClient` (24 after the catalog policy change).
 - [x] Step 3: deterministic endpoints — teams, battlers and every battle-engine type (`Team`, `TypeExposure`, `TeamAnalysis`, `Battler`, `BattleStats`, `DamageRoll`, `UseMove`, `Switch`, `Combatant`, `Side`, `BattleState`, `BattleEvent`, `BattleResult`, `Matchup`, `Choice`, `Mistake`) are frozen, strict pydantic models; 265 positional constructor arguments in 25 files were converted by the same one-off AST codemod as Step 1 (verified first against the unchanged dataclasses: all tests passed), and `dataclasses.replace` became `model_copy`. Engine benchmark (500 seeded greedy 3v3 battles, best of 3): dataclasses 0.66 ms/battle → pydantic 1.00 ms (+52%) → 0.60 ms after caching `battle_stats` (the profile showed it building and validating a new `BattleStats` ~175k times per 200 battles); battle outcomes are identical. `TeamAnalysis` exposes `vulnerabilities`, `unresisted` and `score` as computed fields. New endpoints: `POST /teams/analysis`, `/battlers` (no moves = default moveset), `/damage`, `/battles` (one seeded battle, greedy or random players, full event log). Request bodies are strict DTOs with `list` fields (FastAPI passes JSON arrays as lists; strict mode would reject them for tuples); names are normalized and validated by shared `NameOrId` / `MoveName` types, so bad names, sizes and player names are 422 before any PokéAPI call; domain rule violations (unlearnable, unsupported or status moves) are 422 with the rule's message. Live: a 2v2 battle with default movesets took ~6 s (≈100 PokéAPI requests per Pokémon, D48), with explicit movesets ~0.2 s. 31 new API tests, including one that checks `/battles` against a direct `run_battle` on the same seed.
 - [x] Step 4a: agent outputs on pydantic, LLM schemas generated from models — every structured reply is a `FrozenModel` (`PokedexAnswer`, `TeamProposal`/`MemberChoice`, `GeneralistReply`, `OptimizationReply`/`Claim`/`ProposedSwap`), and the per-call replies with enums of legal ids (team slots, mistake ids, battle options) are built with `create_model` and `Literal[...]`. `OutputSchema.from_model` generates the strict JSON Schema: `$ref`s inlined, titles, defaults and class docstrings dropped (field descriptions kept, since they instruct the model), `const` turned into a one-value `enum`; it refuses models strict mode would reject (optional fields or extra properties allowed). All 7 hand-written schemas are gone, so a schema can no longer drift from the validation that follows it. `parse_reply(model, completion)` validates a reply as JSON (strict, so no coercion, while JSON arrays still fill tuples) and turns failures into `LlmRequestError` with the field path and the partial usage (D32); it replaces 7 hand-written `from_dict`/`try`/`KeyError` blocks. Results (`ResearchResult`, `TeamBuildResult`, `GeneralistResult`, `ClaimCheck`, `SwapDecision`, `OptimizationResult`, `Threat`, `Counter`, `OpponentAnalysis`, `Lesson`, `BattleReview`, `BattleDecision`, `Delegation`, `SupervisorResult`) are pydantic too; derived values (`ungrounded`, `self_checked`, `correct`, token totals) are computed fields, and `Completion`/`SharedContext` are held as excluded `InstanceOf` fields, since they are provider and working state, not output. `to_dict()` shapes, and so agent tool outputs, are unchanged. 89 positional arguments converted by the same codemod (skipping `collections.Counter`). Live check: OpenAI accepted every generated schema (research, optimizer with the `"in"` alias, opponent analysis and battle decision with per-call enums; the 4 opt-in `openai` tests pass).
+- [x] Step 4b: agent endpoints — `POST /research`, `/teams/build`, `/teams/optimize`, `/advise`, `/scout`, each synchronous and returning `{"result", "usage"}`: the agent's pydantic result (with computed fields such as `ungrounded`, `self_checked`, claim `correct`, and the supervisor's new `facts` and token split) and `Usage` from the observed completion (model, tokens, latency, tool calls with arguments). The LLM client is an injected provider (`create_app(catalogs, chats, runner)`), created per request so missing credentials fail before any work. LLM errors map to HTTP: unavailable → 503; auth and invalid replies → 502 (the model or the server's credentials failed, not the caller). Prompts are capped at 2,000 characters. Tests use a scripted fake LLM that runs the agents' real tools, so grounding, self-checks and delegation behave as in production. `ask`, the unconstrained model playground, was not ported.
+- [x] Step 5: background jobs — `POST /jobs/battles` (any players including `agent`, optional scouting, up to 1,000 seeds, optional event logs), `/jobs/battle-evals`, `/jobs/battle-feedback`, `/jobs/research-evals`, `/jobs/compare` validate the request (ids as `Literal` enums, LLM credentials at submission), answer 202 with a `Location` header, and `GET /jobs/{id}` reports status, timestamps, progress lines, the result or a classified error (`not_found`, `invalid_input`, `upstream_unavailable`, `llm_unavailable`, `llm_auth`, `llm_request`, `internal`). In-memory, thread-safe `JobStore` of frozen `Job` snapshots; work runs on a 2-thread pool owned by the app (or an injected runner; tests run jobs synchronously). Failed evaluation cases are results, not job failures; `compare` keeps finished runs when an outage aborts it (as the CLI did). Jobs are lost on restart.
+- [x] Step 6: CLI removed — `pokeverse.cli`, `python -m pokeverse` and their tests deleted, the console script and the direct `typer` dependency dropped. `.env` is now loaded by `pokeverse.api.main` (the FastAPI entrypoint), so tests that build apps with `create_app` never read a real `.env`. Behaviour the CLI tests covered lives in the API, agent and eval tests; the default DB path tests moved to `tests/test_paths.py`. Live end to end (gpt-5.6-terra): `/research` grounded (`ungrounded` empty, 1.3k tokens), `/teams/optimize` flagged the wrong "Charizard resists Ground" claim, `/scout` returned a verified briefing, and an agent `/jobs/battles` job ran 2 seeds with 0 fallbacks. 579 offline tests and 24 opt-in live tests pass.
 
 ## Completed
+
+### Phase 3.5 — REST API (branch `phase-3.5`)
+
+Deliverable: a FastAPI service that replaces the CLI. Every domain model, battle-engine type and agent output is a frozen, strict pydantic model; the OpenAPI schema, the request validation and the LLM output schemas are all generated from them. Lookups and deterministic work (catalog, team analysis, battlers, damage, single battles) are synchronous endpoints; each agent has a synchronous endpoint returning its result plus observed token usage; agent battles, multi-run battles and the four evaluation suites run as background jobs (`POST /jobs/...` → 202, `GET /jobs/{id}`). PokéAPI became the source of truth for every catalog read (D48).
 
 ### Phase 3 — Battle Intelligence (branch `phase-3`)
 
@@ -144,10 +151,10 @@ Deliverable: an AI-assisted battle strategy system. Battle mechanics are determi
 
 ## Next Up
 
-- Phase 3.5 Step 4b: single-call agent endpoints — `/research`, `/teams/build`, `/teams/optimize`, `/advise`, `/scout`; LLM client injected like the catalog; LLM errors mapped to HTTP.
-- Phase 4 — Persistent Pokémon World (paused until the REST API is done): trainer profiles, persistent application state, NPC interactions, quests and exploration, memory.
+- Phase 4 — Persistent Pokémon World: trainer profiles, persistent application state, NPC interactions, quests and exploration, memory — now as API resources rather than CLI commands.
+- Carried over from Phase 3.5: authentication (an API key header) before the API is exposed beyond localhost; a durable job store and a separate worker (SQS + DynamoDB in Phase 5) so jobs survive restarts and are pruned; a per-request token or cost budget for agent endpoints; PokéAPI load under D48 (default movesets cost ~100 requests per Pokémon per request), e.g. a TTL refresh or mirror fallback if latency, rate limits or outages hurt.
 - Carried over from Phase 3: larger agent samples (or cheaper models) before ranking battle players; a richer mistake signal, e.g. comparison with lookahead play, so the feedback loop has something to learn; PP, status conditions, abilities and hidden opponent teams.
-- Carried over from Phase 2: repeated runs per cell in `compare` before ranking systems; `goal` constraints such as "Fire-only" are enforced only by the model; in `auto` mode, wrong type claims on teams without vulnerabilities are not fact-checked; the Strands spike (re-implement the Supervisor and compare with `pokeverse compare`).
+- Carried over from Phase 2: repeated runs per cell in `compare` before ranking systems; `goal` constraints such as "Fire-only" are enforced only by the model; in `auto` mode, wrong type claims on teams without vulnerabilities are not fact-checked; the Strands spike (re-implement the Supervisor and compare with the `/jobs/compare` suite).
 
 ## Running Locally
 
@@ -157,29 +164,28 @@ uv run pytest                    # offline tests
 uv run pytest -m network         # opt-in live PokéAPI tests
 uv run pytest -m openai          # opt-in live OpenAI tests (needs OPENAI_API_KEY, costs money)
 uv run ruff check . && uv run ruff format --check .
-uv run pokeverse --version
 uv run fastapi dev                # REST API on http://127.0.0.1:8000 with auto-reload, docs at /docs
-uv run pokeverse pokemon pikachu    # uses ~/.local/share/pokeverse/catalog.db
-uv run pokeverse list
-uv run pokeverse move "Swords Dance"
-uv run pokeverse learnset garchomp
-uv run pokeverse moveset garchomp earthquake "Dragon Claw" "Stone Edge" "Fire Fang"
-uv run pokeverse damage garchomp earthquake pikachu
-uv run pokeverse battle --side1 garchomp --side1 pikachu --side2 tyranitar --side2 gyarados --seed 1
-uv run pokeverse battle --side1 garchomp --side2 garchomp --player2 random --runs 100
-uv run pokeverse battle --side1 garchomp --side1 pikachu --side1 charizard --side2 tyranitar --side2 gyarados --side2 snorlax --player1 agent --seed 1
-uv run pokeverse scout --side1 garchomp --side1 pikachu --side1 charizard --side2 tyranitar --side2 gyarados --side2 snorlax
-uv run pokeverse battle-eval --system greedy --seeds 50
-uv run pokeverse battle-feedback --scenario bulk --train 5 --test 5
-uv run pokeverse ask "What type is Pikachu?" --usage   # needs OPENAI_API_KEY in .env or the environment
-uv run pokeverse ask "What type is Pikachu?" --no-tools --usage   # model answers from memory only
-uv run pokeverse ask "What type is Pikachu?" --json              # validated structured answer
-uv run pokeverse research "What type is Mr. Mime?" --usage       # Research Agent
-uv run pokeverse eval                                            # evaluation suite (live, costs tokens)
-uv run pokeverse team charizard blastoise venusaur              # deterministic team analysis
-uv run pokeverse build "A balanced team of 6 around Pikachu"    # Team Composition Agent
-uv run pokeverse advise "Is Gengar weak to Psychic?" --usage    # Supervisor (delegates)
-uv run pokeverse advise "Build a team of 4 Fire-type Pokémon only" --optimize auto --usage
-uv run pokeverse optimize reshiram turtonator gouging-fire volcanion --goal "Fire-only"   # Team Optimization Agent
-uv run pokeverse compare --case fire-only                       # single vs multi-agent (live, costly)
+```
+
+With the server running (agent endpoints and jobs need `OPENAI_API_KEY` in `.env` and cost tokens):
+
+```bash
+curl -s http://127.0.0.1:8000/pokemon/pikachu
+curl -s "http://127.0.0.1:8000/pokemon?limit=5"
+curl -s "http://127.0.0.1:8000/moves/Swords%20Dance"
+curl -s -X POST http://127.0.0.1:8000/teams/analysis -H 'Content-Type: application/json' -d '{"members": ["charizard", "blastoise", "venusaur"]}'
+curl -s -X POST http://127.0.0.1:8000/battlers -H 'Content-Type: application/json' -d '{"pokemon": "garchomp", "moves": ["earthquake", "Dragon Claw"]}'
+curl -s -X POST http://127.0.0.1:8000/damage -H 'Content-Type: application/json' -d '{"attacker": "garchomp", "move": "earthquake", "defender": "pikachu"}'
+curl -s -X POST http://127.0.0.1:8000/battles -H 'Content-Type: application/json' -d '{"side1": [{"pokemon": "garchomp", "moves": ["earthquake"]}], "side2": [{"pokemon": "pikachu", "moves": ["thunderbolt"]}], "seed": 1}'
+curl -s -X POST http://127.0.0.1:8000/research -H 'Content-Type: application/json' -d '{"question": "What type is Mr. Mime?"}'
+curl -s -X POST http://127.0.0.1:8000/teams/build -H 'Content-Type: application/json' -d '{"request": "A balanced team of 6 around Pikachu"}'
+curl -s -X POST http://127.0.0.1:8000/teams/optimize -H 'Content-Type: application/json' -d '{"members": ["reshiram", "turtonator", "gouging-fire", "volcanion"], "goal": "Fire-only"}'
+curl -s -X POST http://127.0.0.1:8000/advise -H 'Content-Type: application/json' -d '{"request": "Build a team of 4 Fire-type Pokémon only", "optimize": "auto"}'
+curl -s -X POST http://127.0.0.1:8000/scout -H 'Content-Type: application/json' -d '{"side1": [{"pokemon": "garchomp"}], "side2": [{"pokemon": "tyranitar"}]}'
+curl -s -X POST http://127.0.0.1:8000/jobs/battles -H 'Content-Type: application/json' -d '{"side1": [{"pokemon": "garchomp"}], "side2": [{"pokemon": "garchomp"}], "player2": "random", "runs": 100, "events": false}'
+curl -s -X POST http://127.0.0.1:8000/jobs/battle-evals -H 'Content-Type: application/json' -d '{"systems": ["greedy"], "seeds": 50}'
+curl -s -X POST http://127.0.0.1:8000/jobs/battle-feedback -H 'Content-Type: application/json' -d '{"scenario": "bulk", "train": 5, "test": 5}'
+curl -s -X POST http://127.0.0.1:8000/jobs/research-evals -H 'Content-Type: application/json' -d '{}'
+curl -s -X POST http://127.0.0.1:8000/jobs/compare -H 'Content-Type: application/json' -d '{"cases": ["fire-only"]}'
+curl -s http://127.0.0.1:8000/jobs/JOB_ID
 ```

@@ -149,6 +149,12 @@ class SupervisorResult(FrozenModel):
 
     @computed_field
     @property
+    def facts(self) -> dict[str, Any]:
+        """Verified facts handed between specialists (from tool outputs only)."""
+        return self.context.to_dict()
+
+    @computed_field
+    @property
     def specialist_tokens(self) -> int:
         return sum(delegation.tokens for delegation in self.delegations)
 

@@ -5,8 +5,8 @@
 **Project Name:** PokéVerse AI  
 **GitHub Repository:** `mpvdev/pokeverse-ai`  
 **Project Type:** Multi-Agent AI + AWS Portfolio Project  
-**Current Phase:** Phase 4 — Persistent Pokémon World (not started; Phase 3 complete)  
-**Development Approach:** Backend-first, CLI-first, learning-oriented
+**Current Phase:** Phase 4 — Persistent Pokémon World (not started; Phase 3.5 complete)  
+**Development Approach:** Backend-first, API-first (FastAPI), learning-oriented
 
 ### Vision
 
@@ -90,13 +90,12 @@ Constraints:
 
 ### Rule 2 — Backend First
 
-The project will initially be developed using:
+The project is developed using:
 
-- Python CLI applications.
+- A Python REST API (FastAPI), which replaced the early CLI in Phase 3.5.
 - Python modules and packages.
 - JSON-based input/output.
 - Automated tests.
-- REST APIs when required.
 
 **Do not introduce a frontend until the explicitly planned frontend phase.**
 
@@ -341,6 +340,8 @@ AI Agents and Game Services
 
 ### Resilience Requirements
 
+> **Superseded for now (decision D48):** at the developer's request, PokéAPI is the source of truth for every read. The catalog fetches every lookup from PokéAPI and mirrors it to SQLite without reading it back, so an outage fails lookups. The requirements below describe the longer-term goal; revisit them (e.g. TTL refresh or fallback to the mirror) before relying on the platform.
+
 PokéVerse AI should continue operating when PokéAPI is unavailable.
 
 Design for:
@@ -394,8 +395,7 @@ These are proposed technologies, not immutable decisions.
 ### Application
 
 - Python
-- FastAPI, when REST APIs become necessary
-- CLI for early development
+- FastAPI (the only interface since Phase 3.5)
 
 ### AI Engineering
 
@@ -491,6 +491,15 @@ Goals:
 
 Deliverable: An AI-assisted battle strategy system.
 
+### Phase 3.5 — REST API (interim, complete)
+
+Goals:
+- Replace the CLI with a FastAPI service.
+- Move every domain model, engine type and agent output to pydantic; generate LLM output schemas from the models.
+- Run long agent and evaluation work as background jobs.
+
+Deliverable: A REST API covering every capability of Phases 1–3.
+
 ### Phase 4 — Persistent Pokémon World
 
 Goals:
@@ -500,7 +509,7 @@ Goals:
 - Implement quests and exploration.
 - Introduce relevant memory mechanisms.
 
-Deliverable: A CLI-based Pokémon adventure experience.
+Deliverable: An API-driven Pokémon adventure experience.
 
 ### Phase 5 — AWS Deployment
 
@@ -618,10 +627,10 @@ The following decisions have already been made:
 - Project name: PokéVerse AI.
 - Repository: `mpvdev/pokeverse-ai`.
 - Repository strategy: Single monorepo.
-- Development strategy: Backend-first and CLI-first.
+- Development strategy: Backend-first; a FastAPI REST API is the interface (the CLI was removed in Phase 3.5).
 - Frontend: Deferred.
-- Pokémon data source: PokéAPI with a locally maintained catalog.
-- Data resilience: Core functionality must survive upstream API outages.
+- Pokémon data source: PokéAPI, read on every lookup and mirrored to SQLite (D48).
+- Data resilience: long-term goal; currently a PokéAPI outage fails lookups (D48).
 - Agent architecture: Proposed 16 agents, introduced progressively.
 - AWS: Introduced incrementally.
 - Python version: 3.15 only (`>=3.15,<3.16`), intentionally.
@@ -629,6 +638,13 @@ The following decisions have already been made:
 - GitHub Copilot (Claude) in VS Code provides mentorship, architecture guidance, reviews, debugging, and explicitly requested changes.
 
 **Current development phase: Phase 4 — Persistent Pokémon World** (not started).
+
+Phase 3.5 (REST API) is complete on branch `phase-3.5`:
+
+- FastAPI service (`uv run fastapi dev`, docs at `/docs`) replaces the CLI: catalog lookups, team analysis, battlers, damage and seeded battles; agent endpoints (`/research`, `/teams/build`, `/teams/optimize`, `/advise`, `/scout`) returning results with observed token usage; background jobs for agent battles and the four evaluation suites (`/jobs/...`, `GET /jobs/{id}`).
+- Every domain model, battle-engine type and agent output is a frozen, strict pydantic model; LLM output schemas are generated from the models and replies are validated against them.
+- PokéAPI is the source of truth for every catalog read, mirrored to SQLite (D48).
+- No authentication yet: keep the server on localhost.
 
 Phase 3 (Battle Intelligence) is complete on branch `phase-3`:
 
@@ -653,7 +669,7 @@ Phase 1 (Intelligent Pokédex) is complete on branch `phase-1`:
 Phase 0 (Repository Foundation) is complete:
 
 - `src/` layout package `pokeverse` built with setuptools via `pyproject.toml`.
-- Typer CLI (`pokeverse` / `python -m pokeverse`) with a welcome message and `--version`.
+- Typer CLI (`pokeverse` / `python -m pokeverse`) with a welcome message and `--version` (removed in Phase 3.5).
 - Immutable, validated `Pokemon` domain model in `pokeverse.catalog`.
 - pytest test suite and ruff linting/formatting conventions.
 
@@ -663,9 +679,10 @@ See `docs/PROGRESS.md` for detailed progress and next steps.
 
 ## 12. Immediate Next Steps
 
-1. Plan Phase 4 — Persistent Pokémon World — starting with trainer profiles and persistent application state, one step at a time.
-2. Phase 3 carry-overs: larger agent samples before ranking battle players (agent results so far overlap with greedy); a richer mistake signal (e.g. comparing against lookahead play) so the feedback loop has something to learn; PP, status conditions and abilities; hidden opponent teams.
-3. Phase 2 carry-overs: repeated runs per case in `pokeverse compare`; code-enforced team constraints (e.g. "Fire-only"); the Strands spike against the hand-built Supervisor.
+1. Plan Phase 4 — Persistent Pokémon World — starting with trainer profiles and persistent application state as API resources, one step at a time.
+2. Phase 3.5 carry-overs: authentication before exposing the API; a durable job store and worker (Phase 5: SQS + DynamoDB); per-request token budgets; PokéAPI load and outages under D48.
+3. Phase 3 carry-overs: larger agent samples before ranking battle players (agent results so far overlap with greedy); a richer mistake signal (e.g. comparing against lookahead play) so the feedback loop has something to learn; PP, status conditions and abilities; hidden opponent teams.
+4. Phase 2 carry-overs: repeated runs per case in the compare suite; code-enforced team constraints (e.g. "Fire-only"); the Strands spike against the hand-built Supervisor.
 
 Implement Phase 4 one step at a time (see `docs/PROGRESS.md`), handing each step to the developer for review before starting the next.
 

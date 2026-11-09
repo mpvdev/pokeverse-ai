@@ -1,7 +1,9 @@
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -10,8 +12,66 @@ from fastapi.testclient import TestClient
 from pokeverse.api import CatalogProvider, create_app
 from pokeverse.catalog import PokemonCatalog, SqlitePokemonRepository
 from pokeverse.catalog.pokeapi import PokeApiClient
+from pokeverse.llm import Completion, OutputSchema, Tool, ToolCall
 
 FIXTURES = Path(__file__).parent.parent / "catalog" / "fixtures" / "pokeapi"
+
+
+@dataclass
+class Reply:
+    """One scripted model turn: tools to run (for real), then the final text or data."""
+
+    tools: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    data: dict[str, Any] | None = None
+    text: str = ""
+
+
+class FakeChat:
+    """Plays scripted replies in order; nested agent calls take the next ones.
+
+    With the script empty, battle decisions and opponent analyses get a valid default reply.
+    """
+
+    def __init__(self) -> None:
+        self.script: list[Reply | Exception] = []
+        self.calls: list[dict[str, Any]] = []
+
+    def complete(
+        self,
+        prompt: str,
+        *,
+        tools: Sequence[Tool] = (),
+        output_schema: OutputSchema | None = None,
+        **kwargs: Any,
+    ) -> Completion:
+        self.calls.append({"prompt": prompt, "schema": output_schema, **kwargs})
+        reply = self.script.pop(0) if self.script else default_reply(output_schema)
+        if isinstance(reply, Exception):
+            raise reply
+        by_name = {tool.name: tool for tool in tools}
+        calls = tuple(
+            ToolCall(name=name, arguments=args, output=by_name[name].handler(**args))
+            for name, args in reply.tools
+        )
+        return Completion(reply.text, "fake-model", "completed", 100, 20, 5, calls, reply.data)
+
+
+def default_reply(schema: OutputSchema | None) -> Reply:
+    assert schema is not None, "FakeChat script is empty"
+    properties = schema.schema["properties"]
+    if schema.name == "battle_decision":
+        return Reply(data={"action": properties["action"]["enum"][0], "reason": "First option."})
+    if schema.name == "opponent_analysis":
+        foes = properties["threats"]["items"]["properties"]["foe"]["enum"]
+        own = properties["counters"]["items"]["properties"]["answer"]["enum"]
+        return Reply(
+            data={
+                "threats": [{"foe": foe, "danger": "high", "reason": "Fast."} for foe in foes],
+                "counters": [{"threat": foes[0], "answer": own[0], "reason": "Wins."}],
+                "plan": "Lead with our first Pokémon.",
+            }
+        )
+    raise AssertionError(f"no default reply for {schema.name}")
 
 
 class FakePokeApi:
@@ -54,11 +114,16 @@ def pokeapi() -> FakePokeApi:
 
 
 @pytest.fixture
-def client(tmp_path: Path, pokeapi: FakePokeApi) -> Iterator[TestClient]:
+def chat() -> FakeChat:
+    return FakeChat()
+
+
+@pytest.fixture
+def catalogs(tmp_path: Path, pokeapi: FakePokeApi) -> CatalogProvider:
     db_path = tmp_path / "catalog.db"
 
     @contextmanager
-    def catalogs() -> Iterator[PokemonCatalog]:
+    def open_catalog() -> Iterator[PokemonCatalog]:
         transport = httpx.MockTransport(pokeapi.handler)
         with (
             SqlitePokemonRepository(db_path) as repository,
@@ -66,6 +131,14 @@ def client(tmp_path: Path, pokeapi: FakePokeApi) -> Iterator[TestClient]:
         ):
             yield PokemonCatalog(repository, upstream)
 
-    provider: CatalogProvider = catalogs
-    with TestClient(create_app(provider)) as test_client:
+    return open_catalog
+
+
+def run_now(work: Callable[[], None]) -> None:
+    work()
+
+
+@pytest.fixture
+def client(catalogs: CatalogProvider, chat: FakeChat) -> Iterator[TestClient]:
+    with TestClient(create_app(catalogs, chats=lambda: chat, runner=run_now)) as test_client:
         yield test_client

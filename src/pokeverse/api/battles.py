@@ -78,13 +78,13 @@ class BattleReport(FrozenModel):
     events: tuple[BattleEvent, ...]
 
 
-def _battler(catalog: PokemonCatalog, spec: BattlerSpec) -> Battler:
+def resolve_battler(catalog: PokemonCatalog, spec: BattlerSpec) -> Battler:
     if spec.moves:
         return load_battler(catalog, spec.pokemon, spec.moves)
     return default_battler(catalog, spec.pokemon)
 
 
-def _spec(battler: Battler) -> BattlerSpec:
+def battler_spec(battler: Battler) -> BattlerSpec:
     return BattlerSpec(pokemon=battler.pokemon.name, moves=[move.name for move in battler.moves])
 
 
@@ -92,7 +92,7 @@ def _spec(battler: Battler) -> BattlerSpec:
 def battler(spec: BattlerSpec, catalogs: Catalogs) -> Battler:
     """Validate a moveset, or compute the default one when no moves are given."""
     with catalogs() as catalog, invalid_input():
-        return _battler(catalog, spec)
+        return resolve_battler(catalog, spec)
 
 
 @router.post("/damage", response_model=DamageReport)
@@ -122,7 +122,8 @@ def battle(request: BattleRequest, catalogs: Catalogs) -> BattleReport:
     """One seeded battle between code players; the same request always gives the same result."""
     with catalogs() as catalog, invalid_input():
         teams = [
-            [_battler(catalog, spec) for spec in side] for side in (request.side1, request.side2)
+            [resolve_battler(catalog, spec) for spec in side]
+            for side in (request.side1, request.side2)
         ]
     players = (
         make_player(request.player1, random.Random(f"{request.seed}:1")),
@@ -132,7 +133,7 @@ def battle(request: BattleRequest, catalogs: Catalogs) -> BattleReport:
     return BattleReport(
         seed=request.seed,
         players=(request.player1, request.player2),
-        teams=([_spec(b) for b in teams[0]], [_spec(b) for b in teams[1]]),
+        teams=([battler_spec(b) for b in teams[0]], [battler_spec(b) for b in teams[1]]),
         winner=result.winner,
         turns=result.turns,
         events=result.events,

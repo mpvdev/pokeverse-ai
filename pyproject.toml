@@ -15,17 +15,13 @@ dependencies = [
     "openai>=3.46",
     "pydantic>=2.14",
     "python-dotenv>=1.2.4",
-    "typer>=0.25.1",
 ]
-
-[project.scripts]
-pokeverse = "pokeverse.cli:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.fastapi]
-entrypoint = "pokeverse.api:app"
+entrypoint = "pokeverse.api.main:app"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
