@@ -88,24 +88,28 @@ def test_mentions_accepts_spaced_names() -> None:
 
 
 def delegation(agent: str, output: dict[str, Any] | None) -> Delegation:
-    return Delegation(agent, "task", output, None if output else "boom")
+    return Delegation(agent=agent, task="task", output=output, error=None if output else "boom")
 
 
 def test_observed_team_prefers_optimizer_output() -> None:
     completion = Completion("answer", "fake", "completed", 1, 1, 1)
     built = {"members": [{"name": "garchomp", "role": "x"}, {"name": "arcanine", "role": "y"}]}
     result = SupervisorResult(
-        "answer",
-        (
+        answer="answer",
+        delegations=(
             delegation("research", {"answer": "x"}),
             delegation("team_builder", built),
             delegation("team_optimizer", {"final_members": ["garchomp", "clefable"]}),
         ),
-        completion,
+        completion=completion,
     )
-    builder_only = SupervisorResult("a", result.delegations[:2], completion)
+    builder_only = SupervisorResult(
+        answer="a", delegations=result.delegations[:2], completion=completion
+    )
     failed_optimizer = SupervisorResult(
-        "a", (*result.delegations[:2], delegation("team_optimizer", None)), completion
+        answer="a",
+        delegations=(*result.delegations[:2], delegation("team_optimizer", None)),
+        completion=completion,
     )
 
     assert observed_team(result) == ["garchomp", "clefable"]
@@ -165,7 +169,9 @@ def fake_supervisor(monkeypatch: pytest.MonkeyPatch, delegations: tuple[Delegati
 
         def run(self, request: str) -> SupervisorResult:
             completion = Completion(GOOD_ANSWER, "fake", "completed", 100, 50, 5)
-            return SupervisorResult(GOOD_ANSWER, delegations, completion)
+            return SupervisorResult(
+                answer=GOOD_ANSWER, delegations=delegations, completion=completion
+            )
 
     monkeypatch.setattr(compare, "Supervisor", FakeSupervisor)
 

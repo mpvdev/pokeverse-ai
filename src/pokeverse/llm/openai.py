@@ -17,6 +17,7 @@ from openai import (
     PermissionDeniedError,
     RateLimitError,
 )
+from pydantic import BaseModel, ValidationError
 
 from pokeverse.llm.config import LlmSettings
 from pokeverse.llm.structured import OutputSchema
@@ -64,6 +65,22 @@ class Completion:
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens
+
+
+def parse_reply[M: BaseModel](
+    model: type[M], completion: Completion, what: str = "Model reply"
+) -> M:
+    """Validate a structured reply as JSON (strict: no coercion); failures keep the usage."""
+    try:
+        return model.model_validate_json(json.dumps(completion.data or {}))
+    except ValidationError as error:
+        problems = "; ".join(
+            f"{'.'.join(map(str, e['loc'])) or 'reply'}: {e['msg'].removeprefix('Value error, ')}"
+            for e in error.errors()
+        )
+        raise LlmRequestError(
+            f"{what} failed validation: {problems}", completion=completion
+        ) from error
 
 
 class OpenAIChat:

@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterator
 from typing import Any
 
@@ -128,7 +129,7 @@ def test_invalid_proposals_are_rejected(catalog: PokemonCatalog, data: dict[str,
 def test_proposal_round_trips() -> None:
     data = proposal("pikachu", "pikachu")
 
-    assert TeamProposal.from_dict(data).to_dict() == data
+    assert TeamProposal.model_validate_json(json.dumps(data)).to_dict() == data
 
 
 def test_schema_is_strict_mode_compatible() -> None:

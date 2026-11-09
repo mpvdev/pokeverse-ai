@@ -1,8 +1,9 @@
 """The Supervisor Agent: routes a request to specialist agents exposed as tools."""
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
+
+from pydantic import Field, InstanceOf, computed_field
 
 from pokeverse.agents.context import SharedContext, with_context
 from pokeverse.agents.optimizer import TeamOptimizationAgent
@@ -11,6 +12,7 @@ from pokeverse.agents.team_builder import TeamCompositionAgent
 from pokeverse.agents.tools import normalize_identifier
 from pokeverse.catalog import PokemonCatalog, PokemonNotInCatalogError
 from pokeverse.llm import Completion, LlmRequestError, Tool
+from pokeverse.model import FrozenModel
 from pokeverse.teams import MAX_TEAM_SIZE, Team
 
 OptimizeMode = Literal["never", "auto", "always"]
@@ -112,18 +114,18 @@ OPTIMIZER_PARAMETERS = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class Delegation:
+class Delegation(FrozenModel):
     """One task handed to a specialist, and what came back."""
 
     agent: str
     task: str
     output: dict[str, Any] | None = None
     error: str | None = None
-    completion: Completion | None = None
+    completion: InstanceOf[Completion] | None = Field(default=None, exclude=True)
     # Pokémon whose verified facts were handed to this specialist with its task.
     handoff: tuple[str, ...] = ()
 
+    @computed_field
     @property
     def tokens(self) -> int:
         return self.completion.total_tokens if self.completion else 0
@@ -139,17 +141,18 @@ class Delegation:
         }
 
 
-@dataclass(frozen=True, slots=True)
-class SupervisorResult:
+class SupervisorResult(FrozenModel):
     answer: str
     delegations: tuple[Delegation, ...]
-    completion: Completion
-    context: SharedContext = field(default_factory=SharedContext)
+    completion: InstanceOf[Completion] = Field(exclude=True)
+    context: InstanceOf[SharedContext] = Field(default_factory=SharedContext, exclude=True)
 
+    @computed_field
     @property
     def specialist_tokens(self) -> int:
         return sum(delegation.tokens for delegation in self.delegations)
 
+    @computed_field
     @property
     def total_tokens(self) -> int:
         return self.completion.total_tokens + self.specialist_tokens
@@ -210,17 +213,29 @@ class Supervisor:
             except LlmRequestError as error:
                 delegations.append(
                     Delegation(
-                        agent, task, error=str(error), completion=error.completion, handoff=handoff
+                        agent=agent,
+                        task=task,
+                        error=str(error),
+                        completion=error.completion,
+                        handoff=handoff,
                     )
                 )
                 return {"error": "specialist_failed", "message": str(error)}
             except ValueError as error:
-                delegations.append(Delegation(agent, task, error=str(error), handoff=handoff))
+                delegations.append(
+                    Delegation(agent=agent, task=task, error=str(error), handoff=handoff)
+                )
                 return {"error": "specialist_failed", "message": str(error)}
             context.record(result.completion.tool_calls)
             output = result.to_dict()
             delegations.append(
-                Delegation(agent, task, output, completion=result.completion, handoff=handoff)
+                Delegation(
+                    agent=agent,
+                    task=task,
+                    output=output,
+                    completion=result.completion,
+                    handoff=handoff,
+                )
             )
             return output
 
@@ -302,4 +317,9 @@ class Supervisor:
         )
         if not completion.text.strip():
             raise LlmRequestError("Supervisor returned an empty answer")
-        return SupervisorResult(completion.text, tuple(delegations), completion, context)
+        return SupervisorResult(
+            answer=completion.text,
+            delegations=tuple(delegations),
+            completion=completion,
+            context=context,
+        )

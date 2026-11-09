@@ -8,6 +8,7 @@ from pokeverse.llm.openai import (
     LlmRequestError,
     LlmUnavailableError,
     OpenAIChat,
+    parse_reply,
 )
 from pokeverse.llm.structured import OutputSchema
 from pokeverse.llm.tools import Tool, ToolCall
@@ -23,4 +24,5 @@ __all__ = [
     "OutputSchema",
     "Tool",
     "ToolCall",
+    "parse_reply",
 ]

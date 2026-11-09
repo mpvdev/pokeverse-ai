@@ -71,6 +71,7 @@ from pokeverse.llm import (
     LlmSettings,
     LlmUnavailableError,
     OpenAIChat,
+    parse_reply,
 )
 from pokeverse.paths import default_db_path
 from pokeverse.teams import MAX_TEAM_SIZE, Team, TeamAnalysis, analyze_team
@@ -936,10 +937,7 @@ def ask_command(
                 output_schema=POKEDEX_ANSWER_SCHEMA if as_json else None,
             )
         if as_json:
-            try:
-                answer = PokedexAnswer.from_dict(completion.data or {})
-            except ValueError as error:
-                raise LlmRequestError(f"Model reply failed validation: {error}") from error
+            answer = parse_reply(PokedexAnswer, completion)
 
     typer.echo(json.dumps(answer.to_dict()) if as_json else completion.text)
     if show_usage:

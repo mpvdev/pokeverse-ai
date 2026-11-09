@@ -1,13 +1,15 @@
 """A single generalist agent: the baseline for the multi-agent comparison."""
 
-from dataclasses import dataclass
 from typing import Any
+
+from pydantic import Field, InstanceOf
 
 from pokeverse.agents.research import ChatModel
 from pokeverse.agents.tools import make_catalog_tools, make_team_tools
 from pokeverse.catalog import PokemonCatalog
-from pokeverse.catalog.models import NAME_PATTERN
-from pokeverse.llm import Completion, LlmRequestError, OutputSchema
+from pokeverse.catalog.models import Slug
+from pokeverse.llm import Completion, OutputSchema, parse_reply
+from pokeverse.model import FrozenModel, NonBlank
 from pokeverse.teams import MAX_TEAM_SIZE
 
 GENERALIST_SYSTEM_PROMPT = (
@@ -22,33 +24,25 @@ GENERALIST_SYSTEM_PROMPT = (
 GENERALIST_MAX_TOOL_ROUNDS = 8
 GENERALIST_MAX_TOKENS = 3000
 
-GENERALIST_SCHEMA = OutputSchema(
-    name="generalist_answer",
-    schema={
-        "type": "object",
-        "properties": {
-            "answer": {"type": "string"},
-            "team": {
-                "type": "array",
-                "maxItems": MAX_TEAM_SIZE,
-                "items": {"type": "string", "pattern": f"^{NAME_PATTERN.pattern}$"},
-                "description": "Canonical names of the final team; empty if none was requested.",
-            },
-        },
-        "required": ["answer", "team"],
-        "additionalProperties": False,
-    },
-)
+
+class GeneralistReply(FrozenModel):
+    answer: NonBlank
+    team: tuple[Slug, ...] = Field(
+        max_length=MAX_TEAM_SIZE,
+        description="Canonical names of the final team; empty if none was requested.",
+    )
 
 
-@dataclass(frozen=True, slots=True)
-class GeneralistResult:
+GENERALIST_SCHEMA = OutputSchema.from_model("generalist_answer", GeneralistReply)
+
+
+class GeneralistResult(FrozenModel):
     answer: str
     team: tuple[str, ...]
-    completion: Completion
+    completion: InstanceOf[Completion] = Field(exclude=True)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"answer": self.answer, "team": list(self.team)}
+        return self.model_dump(mode="json")
 
 
 class GeneralistAgent:
@@ -67,8 +61,5 @@ class GeneralistAgent:
             output_schema=GENERALIST_SCHEMA,
             max_tool_rounds=GENERALIST_MAX_TOOL_ROUNDS,
         )
-        data = completion.data or {}
-        answer, team = data.get("answer"), data.get("team")
-        if not isinstance(answer, str) or not answer.strip() or not isinstance(team, list):
-            raise LlmRequestError("Model reply failed validation", completion=completion)
-        return GeneralistResult(answer, tuple(team), completion)
+        reply = parse_reply(GeneralistReply, completion)
+        return GeneralistResult(answer=reply.answer, team=reply.team, completion=completion)

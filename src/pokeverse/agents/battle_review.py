@@ -1,12 +1,14 @@
 """The Battle Evaluation Agent: turns engine-detected mistakes into short, cited lessons."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import Field, InstanceOf, create_model
 
 from pokeverse.agents.research import ChatModel
 from pokeverse.battles import Mistake
-from pokeverse.llm import Completion, LlmRequestError, OutputSchema
+from pokeverse.llm import Completion, OutputSchema, parse_reply
+from pokeverse.model import FrozenModel
 
 MAX_LESSONS = 3
 REVIEW_MAX_TOKENS = 2000
@@ -20,19 +22,17 @@ BATTLE_REVIEW_SYSTEM_PROMPT = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class Lesson:
+class Lesson(FrozenModel):
     text: str
     evidence: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
-        return {"text": self.text, "evidence": list(self.evidence)}
+        return self.model_dump(mode="json")
 
 
-@dataclass(frozen=True, slots=True)
-class BattleReview:
+class BattleReview(FrozenModel):
     lessons: tuple[Lesson, ...]
-    completion: Completion | None
+    completion: InstanceOf[Completion] | None = Field(exclude=True)
 
     def guidance(self) -> str:
         if not self.lessons:
@@ -56,31 +56,16 @@ def review_prompt(mistakes: Sequence[Mistake]) -> str:
     return "\n".join(lines)
 
 
-def review_schema(ids: list[str]) -> OutputSchema:
-    return OutputSchema(
-        name="battle_review",
-        schema={
-            "type": "object",
-            "properties": {
-                "lessons": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "text": {"type": "string"},
-                            "evidence": {
-                                "type": "array",
-                                "items": {"type": "string", "enum": ids},
-                            },
-                        },
-                        "required": ["text", "evidence"],
-                        "additionalProperties": False,
-                    },
-                }
-            },
-            "required": ["lessons"],
-            "additionalProperties": False,
-        },
+def review_reply_model(ids: list[str]) -> type[FrozenModel]:
+    """The reply shape for one review: evidence must be ids of the detected mistakes."""
+    lesson = create_model(
+        "LessonReply",
+        __base__=FrozenModel,
+        text=(str, ...),
+        evidence=(tuple[Literal[tuple(ids)], ...], ...),
+    )
+    return create_model(
+        "BattleReviewReply", __base__=FrozenModel, lessons=(tuple[lesson, ...], ...)
     )
 
 
@@ -92,27 +77,19 @@ class BattleReviewAgent:
     def review(self, mistakes: Sequence[Mistake]) -> BattleReview:
         """Lessons that cite at least one detected mistake; no mistakes means no model call."""
         if not mistakes:
-            return BattleReview((), None)
+            return BattleReview(lessons=(), completion=None)
         ids = mistake_ids(mistakes)
+        reply_model = review_reply_model(ids)
         completion = self._chat.complete(
             review_prompt(mistakes),
             system=BATTLE_REVIEW_SYSTEM_PROMPT,
             max_tokens=self._max_tokens,
-            output_schema=review_schema(ids),
+            output_schema=OutputSchema.from_model("battle_review", reply_model),
         )
-        try:
-            items = (completion.data or {})["lessons"]
-            lessons = tuple(
-                Lesson(item["text"].strip(), tuple(dict.fromkeys(item["evidence"])))
-                for item in items
-            )
-        except (KeyError, TypeError, AttributeError) as error:
-            raise LlmRequestError(
-                f"Battle review failed validation: {error}", completion=completion
-            ) from error
-        cited = tuple(
-            lesson
-            for lesson in lessons
-            if lesson.text and lesson.evidence and set(lesson.evidence) <= set(ids)
+        reply: Any = parse_reply(reply_model, completion, "Battle review")
+        lessons = tuple(
+            Lesson(text=item.text.strip(), evidence=tuple(dict.fromkeys(item.evidence)))
+            for item in reply.lessons
         )
-        return BattleReview(cited[:MAX_LESSONS], completion)
+        cited = tuple(lesson for lesson in lessons if lesson.text and lesson.evidence)
+        return BattleReview(lessons=cited[:MAX_LESSONS], completion=completion)

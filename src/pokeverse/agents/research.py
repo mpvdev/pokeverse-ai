@@ -1,14 +1,16 @@
 """The Pokémon Research Agent: catalog tools + structured answers + grounding check."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Any, Protocol
+
+from pydantic import Field, InstanceOf, computed_field
 
 from pokeverse.agents.answers import POKEDEX_ANSWER_SCHEMA, PokedexAnswer
 from pokeverse.agents.tools import make_catalog_tools
 from pokeverse.catalog import PokemonCatalog
-from pokeverse.llm import Completion, LlmRequestError, OutputSchema, Tool
+from pokeverse.llm import Completion, OutputSchema, Tool, parse_reply
 from pokeverse.llm.openai import DEFAULT_MAX_TOOL_ROUNDS
+from pokeverse.model import FrozenModel
 
 RESEARCH_SYSTEM_PROMPT = (
     "You are the PokéVerse Research Agent, an expert on Pokémon. "
@@ -40,12 +42,11 @@ class ChatModel(Protocol):
     ) -> Completion: ...
 
 
-@dataclass(frozen=True, slots=True)
-class ResearchResult:
+class ResearchResult(FrozenModel):
     answer: PokedexAnswer
-    completion: Completion
+    completion: InstanceOf[Completion] = Field(exclude=True)
     # Names handed over as verified facts by an earlier specialist (see SharedContext).
-    verified_elsewhere: frozenset[str] = frozenset()
+    verified_elsewhere: frozenset[str] = Field(default=frozenset(), exclude=True)
 
     @property
     def looked_up(self) -> frozenset[str]:
@@ -58,6 +59,7 @@ class ResearchResult:
                 names.add(record["name"])
         return frozenset(names)
 
+    @computed_field
     @property
     def ungrounded(self) -> tuple[str, ...]:
         """Pokémon the answer is about that were neither looked up nor handed over as facts."""
@@ -92,10 +94,5 @@ class ResearchAgent:
             tools=self._tools,
             output_schema=POKEDEX_ANSWER_SCHEMA,
         )
-        try:
-            answer = PokedexAnswer.from_dict(completion.data or {})
-        except ValueError as error:
-            raise LlmRequestError(
-                f"Model reply failed validation: {error}", completion=completion
-            ) from error
+        answer = parse_reply(PokedexAnswer, completion)
         return ResearchResult(answer=answer, completion=completion, verified_elsewhere=verified)

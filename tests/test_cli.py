@@ -953,8 +953,16 @@ def canned_supervisor_result() -> Any:
     return SupervisorResult(
         answer="Pikachu is Electric-type.",
         delegations=(
-            Delegation("research", "What type is Pikachu?", {"answer": "Electric"}, None, research),
-            Delegation("team_builder", "Team around Pikachu", error="Model reply failed"),
+            Delegation(
+                agent="research",
+                task="What type is Pikachu?",
+                output={"answer": "Electric"},
+                error=None,
+                completion=research,
+            ),
+            Delegation(
+                agent="team_builder", task="Team around Pikachu", error="Model reply failed"
+            ),
         ),
         completion=Completion("Pikachu is Electric-type.", "fake-model", "completed", 100, 20, 9),
     )

@@ -1,15 +1,18 @@
 """The Opponent Analysis Agent: ranks threats and counters before a battle; code checks them."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, get_args
+
+from pydantic import Field, InstanceOf, create_model
 
 from pokeverse.agents.research import ChatModel
 from pokeverse.battles import Battler, BattleState, matchup
-from pokeverse.llm import Completion, LlmRequestError, OutputSchema
+from pokeverse.llm import Completion, LlmRequestError, OutputSchema, parse_reply
+from pokeverse.model import FrozenModel
 
 ANALYSIS_MAX_TOKENS = 3000
-DANGER_LEVELS = ("high", "medium", "low")
+Danger = Literal["high", "medium", "low"]
+DANGER_LEVELS: tuple[Danger, ...] = get_args(Danger)
 
 OPPONENT_ANALYSIS_SYSTEM_PROMPT = (
     "You are the PokéVerse Opponent Analysis Agent. Before a simplified singles battle you "
@@ -41,70 +44,46 @@ def matchup_table(own: Sequence[Battler], foe: Sequence[Battler]) -> str:
     return "\n".join(lines)
 
 
-def analysis_schema(own_ids: list[str], foe_ids: list[str]) -> OutputSchema:
-    return OutputSchema(
-        name="opponent_analysis",
-        schema={
-            "type": "object",
-            "properties": {
-                "threats": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "foe": {"type": "string", "enum": foe_ids},
-                            "danger": {"type": "string", "enum": list(DANGER_LEVELS)},
-                            "reason": {"type": "string"},
-                        },
-                        "required": ["foe", "danger", "reason"],
-                        "additionalProperties": False,
-                    },
-                },
-                "counters": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "threat": {"type": "string", "enum": foe_ids},
-                            "answer": {"type": "string", "enum": own_ids},
-                            "reason": {"type": "string"},
-                        },
-                        "required": ["threat", "answer", "reason"],
-                        "additionalProperties": False,
-                    },
-                },
-                "plan": {"type": "string"},
-            },
-            "required": ["threats", "counters", "plan"],
-            "additionalProperties": False,
-        },
+def analysis_reply_model(own_ids: list[str], foe_ids: list[str]) -> type[FrozenModel]:
+    """The reply shape for one analysis: team slots are enums of exactly these ids."""
+    foe = Literal[tuple(foe_ids)]
+    own = Literal[tuple(own_ids)]
+    threat = create_model(
+        "ThreatReply", __base__=FrozenModel, foe=(foe, ...), danger=(Danger, ...), reason=(str, ...)
+    )
+    counter = create_model(
+        "CounterReply",
+        __base__=FrozenModel,
+        threat=(foe, ...),
+        answer=(own, ...),
+        reason=(str, ...),
+    )
+    return create_model(
+        "OpponentAnalysisReply",
+        __base__=FrozenModel,
+        threats=(tuple[threat, ...], ...),
+        counters=(tuple[counter, ...], ...),
+        plan=(str, ...),
     )
 
 
-@dataclass(frozen=True, slots=True)
-class Threat:
+class Threat(FrozenModel):
     foe: str
-    danger: str
+    danger: Danger
     reason: str
 
     def to_dict(self) -> dict[str, Any]:
-        return {"foe": self.foe, "danger": self.danger, "reason": self.reason}
+        return self.model_dump(mode="json")
 
 
-@dataclass(frozen=True, slots=True)
-class Counter:
+class Counter(FrozenModel):
     threat: str
     answer: str
     reason: str
     verified: bool
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "threat": self.threat,
-            "answer": self.answer,
-            "reason": self.reason,
-            "verified": self.verified,
-        }
+        return self.model_dump(mode="json")
 
 
 def _name(identifier: str) -> str:
@@ -115,12 +94,11 @@ def _slot(identifier: str) -> int:
     return int(identifier.split(":", 1)[0].split("-", 1)[1])
 
 
-@dataclass(frozen=True, slots=True)
-class OpponentAnalysis:
+class OpponentAnalysis(FrozenModel):
     threats: tuple[Threat, ...]
     counters: tuple[Counter, ...]
     plan: str
-    completion: Completion
+    completion: InstanceOf[Completion] = Field(exclude=True)
 
     def briefing(self, state: BattleState | None = None, side: int = 0) -> str:
         """Threat ranking and verified counters, minus anything already knocked out in ``state``."""
@@ -152,11 +130,7 @@ class OpponentAnalysis:
         return "\n".join(lines)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "threats": [threat.to_dict() for threat in self.threats],
-            "counters": [counter.to_dict() for counter in self.counters],
-            "plan": self.plan,
-        }
+        return self.model_dump(mode="json")
 
 
 class OpponentAnalysisAgent:
@@ -167,34 +141,35 @@ class OpponentAnalysisAgent:
     def analyze(self, own: Sequence[Battler], foe: Sequence[Battler]) -> OpponentAnalysis:
         own_ids = [own_id(i, battler) for i, battler in enumerate(own)]
         foe_ids = [foe_id(j, battler) for j, battler in enumerate(foe)]
+        reply_model = analysis_reply_model(own_ids, foe_ids)
         completion = self._chat.complete(
             matchup_table(own, foe),
             system=OPPONENT_ANALYSIS_SYSTEM_PROMPT,
             max_tokens=self._max_tokens,
-            output_schema=analysis_schema(own_ids, foe_ids),
+            output_schema=OutputSchema.from_model("opponent_analysis", reply_model),
         )
-        data = completion.data or {}
-        try:
-            threats = tuple(
-                Threat(item["foe"], item["danger"], item["reason"]) for item in data["threats"]
-            )
-            ranked = [threat.foe for threat in threats]
-            if sorted(ranked) != sorted(foe_ids):
-                raise ValueError(f"every foe must be ranked exactly once, got {ranked}")
-            counters = tuple(
-                Counter(
-                    item["threat"],
-                    item["answer"],
-                    item["reason"],
-                    matchup(
-                        own[own_ids.index(item["answer"])], foe[foe_ids.index(item["threat"])]
-                    ).wins,
-                )
-                for item in data["counters"]
-            )
-            plan = data["plan"]
-        except (KeyError, TypeError, ValueError) as error:
+        reply: Any = parse_reply(reply_model, completion, "Opponent analysis")
+        ranked = [threat.foe for threat in reply.threats]
+        if sorted(ranked) != sorted(foe_ids):
             raise LlmRequestError(
-                f"Opponent analysis failed validation: {error}", completion=completion
-            ) from error
-        return OpponentAnalysis(threats, counters, plan, completion)
+                f"Opponent analysis failed validation: every foe must be ranked exactly once, "
+                f"got {ranked}",
+                completion=completion,
+            )
+        threats = tuple(
+            Threat(foe=item.foe, danger=item.danger, reason=item.reason) for item in reply.threats
+        )
+        counters = tuple(
+            Counter(
+                threat=item.threat,
+                answer=item.answer,
+                reason=item.reason,
+                verified=matchup(
+                    own[own_ids.index(item.answer)], foe[foe_ids.index(item.threat)]
+                ).wins,
+            )
+            for item in reply.counters
+        )
+        return OpponentAnalysis(
+            threats=threats, counters=counters, plan=reply.plan, completion=completion
+        )
