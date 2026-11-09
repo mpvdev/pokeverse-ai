@@ -19,8 +19,10 @@ from pokeverse.cli import (
     app,
     default_db_path,
 )
+from pokeverse.evals.battles import BattleScenario
 
 FIXTURES = Path(__file__).parent / "catalog" / "fixtures" / "pokeapi"
+PIKACHU_FIXTURE = (FIXTURES / "pikachu.json").read_text()
 
 runner = CliRunner()
 
@@ -36,9 +38,10 @@ class Upstream:
         self.requests.append(request.url.path)
         if self.down:
             raise httpx.ConnectError("connection refused")
-        name = request.url.path.rstrip("/").rsplit("/", 1)[-1]
+        resource, name = request.url.path.rstrip("/").split("/")[-2:]
         name = {"25": "pikachu", "6": "charizard"}.get(name, name)
-        fixture = FIXTURES / f"{name}.json"
+        folder = FIXTURES if resource == "pokemon" else FIXTURES / resource
+        fixture = folder / f"{name}.json"
         if not fixture.exists():
             return httpx.Response(404, json={"status": 404, "message": "Not Found"})
         return httpx.Response(200, json=json.loads(fixture.read_text()))
@@ -80,7 +83,10 @@ def test_pokemon_lookup_prints_summary(db: str, upstream: Upstream) -> None:
     result = invoke(db, "pokemon", "Charizard")
 
     assert result.exit_code == 0
-    assert result.stdout == "#0006 Charizard — Fire / Flying\n"
+    assert result.stdout == (
+        "#0006 Charizard — Fire / Flying\n"
+        "HP 78 / Atk 84 / Def 78 / SpA 109 / SpD 85 / Spe 100 (total 534)\n"
+    )
 
 
 def test_pokemon_lookup_by_id_as_json(db: str, upstream: Upstream) -> None:
@@ -91,6 +97,14 @@ def test_pokemon_lookup_by_id_as_json(db: str, upstream: Upstream) -> None:
         "pokedex_id": 25,
         "name": "pikachu",
         "types": ["electric"],
+        "base_stats": {
+            "hp": 35,
+            "attack": 55,
+            "defense": 40,
+            "special_attack": 50,
+            "special_defense": 50,
+            "speed": 90,
+        },
     }
 
 
@@ -145,6 +159,224 @@ def test_list_empty_catalog(db: str) -> None:
 
     assert result.exit_code == 0
     assert "empty" in result.stdout
+
+
+def test_pokemon_lookup_accepts_pokedex_style_numbers(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "pokemon", "#006")
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith("#0006 Charizard")
+
+
+def test_move_lookup_prints_summary(db: str, upstream: Upstream) -> None:
+    damaging = invoke(db, "move", "Thunderbolt")
+    status = invoke(db, "move", "Swords Dance")
+
+    assert damaging.stdout == (
+        "#0085 Thunderbolt — Electric, special, power 90, accuracy 100%, priority 0, PP 15\n"
+    )
+    assert status.stdout == (
+        "#0014 Swords Dance — Normal, status, power —, accuracy never misses, priority 0, PP 20\n"
+    )
+    assert upstream.requests == ["/api/v2/move/thunderbolt", "/api/v2/move/swords-dance"]
+
+
+def test_move_json_is_served_locally_after_import(db: str, upstream: Upstream) -> None:
+    invoke(db, "move", "thunderbolt")
+    upstream.down = True
+
+    result = invoke(db, "move", "thunderbolt", "--offline", "--json")
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["power"] == 90
+
+
+def test_unknown_move_exits_not_found(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "move", "splashier")
+
+    assert result.exit_code == EXIT_NOT_FOUND
+    assert "does not exist" in result.stderr
+
+
+def test_move_outage_exits_unavailable(db: str, upstream: Upstream) -> None:
+    upstream.down = True
+
+    result = invoke(db, "move", "thunderbolt")
+
+    assert result.exit_code == EXIT_UPSTREAM_UNAVAILABLE
+
+
+def test_learnset_lists_move_names_without_move_lookups(db: str, upstream: Upstream) -> None:
+    text = invoke(db, "learnset", "Pikachu")
+    as_json = invoke(db, "learnset", "pikachu", "--json")
+
+    assert text.stdout.splitlines() == [
+        "#0025 Pikachu — Electric — 6 learnable moves",
+        "iron-tail, quick-attack, surf, thunder-wave, thunderbolt, volt-tackle",
+    ]
+    assert json.loads(as_json.stdout)["learnset"][0] == "iron-tail"
+    assert upstream.requests == ["/api/v2/pokemon/pikachu"]
+
+
+def test_moveset_prints_the_battler(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "pikachu", "Thunderbolt")
+
+    assert result.exit_code == 0
+    assert result.stdout.splitlines() == [
+        "#0025 Pikachu — Electric",
+        "  #0085 Thunderbolt — Electric, special, power 90, accuracy 100%, priority 0, PP 15",
+    ]
+
+
+def test_moveset_json(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "pikachu", "thunderbolt", "--json")
+
+    data = json.loads(result.stdout)
+    assert data["pokemon"]["name"] == "pikachu"
+    assert [move["name"] for move in data["moves"]] == ["thunderbolt"]
+
+
+def test_moveset_rejects_unlearnable_moves_before_fetching_them(
+    db: str, upstream: Upstream
+) -> None:
+    result = invoke(db, "moveset", "pikachu", "thunderbolt", "Swords Dance")
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "pikachu cannot learn: swords-dance" in result.stderr
+    assert upstream.requests == ["/api/v2/pokemon/pikachu"]
+
+
+def test_moveset_rejects_status_moves(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "charizard", "swords-dance")
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "not supported in battle: swords-dance" in result.stderr
+
+
+def test_moveset_checks_the_move_count_before_any_lookup(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "pikachu", *["thunderbolt"] * 5)
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert upstream.requests == []
+
+
+def test_moveset_unknown_move_exits_not_found(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "charizard", "air-slash")
+
+    assert result.exit_code == EXIT_NOT_FOUND
+    assert "does not exist" in result.stderr
+
+
+def test_damage_prints_range_and_critical_maximum(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "damage", "Pikachu", "Thunderbolt", "Charizard")
+
+    assert result.exit_code == 0
+    assert result.stdout == (
+        "Pikachu Thunderbolt vs Charizard: 68-84 damage (44%-55% of 153 HP), 2x, STAB; "
+        "critical hit up to 126\n"
+    )
+
+
+def test_damage_json(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "damage", "pikachu", "thunderbolt", "charizard", "--json")
+
+    assert json.loads(result.stdout) == {
+        "attacker": "pikachu",
+        "move": "thunderbolt",
+        "defender": "charizard",
+        "min": 68,
+        "max": 84,
+        "critical_max": 126,
+        "defender_hp": 153,
+        "effectiveness": 2.0,
+        "stab": True,
+    }
+
+
+def test_damage_rejects_status_moves(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "damage", "charizard", "swords-dance", "pikachu")
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert "power-based" in result.stderr
+
+
+def test_moveset_without_moves_shows_the_default_moveset(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "pikachu")
+
+    assert result.exit_code == 0
+    assert [line.split(" — ")[0] for line in result.stdout.splitlines()[1:]] == [
+        "  #0344 Volt Tackle",
+        "  #0057 Surf",
+        "  #0231 Iron Tail",
+        "  #0098 Quick Attack",
+    ]
+    assert len(upstream.requests) == 1 + len(json.loads(PIKACHU_FIXTURE)["moves"])
+
+
+def test_default_moveset_needs_every_learnable_move(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "moveset", "charizard")
+
+    assert result.exit_code == EXIT_NOT_FOUND
+    assert "does not exist" in result.stderr
+
+
+def test_battle_prints_teams_events_and_winner(db: str, upstream: Upstream) -> None:
+    result = invoke(
+        db, "battle", "--side1", "pikachu:thunderbolt", "--side2", "pikachu", "--seed", "3"
+    )
+
+    assert result.exit_code == 0
+    lines = result.stdout.splitlines()
+    assert lines[0] == "Side 1 (greedy): Pikachu [Thunderbolt]"
+    assert lines[1] == "Side 2 (greedy): Pikachu [Volt Tackle, Surf, Iron Tail, Quick Attack]"
+    assert lines[2] == "[0] Side 1 sends out Pikachu."
+    assert lines[-1].startswith("Winner: Side ")
+
+
+def test_battle_is_reproducible_and_json(db: str, upstream: Upstream) -> None:
+    args = ["battle", "--side1", "pikachu:thunderbolt", "--side2", "pikachu:thunderbolt"]
+    first = json.loads(invoke(db, *args, "--seed", "5", "--json").stdout)
+    second = json.loads(invoke(db, *args, "--seed", "5", "--json", "--offline").stdout)
+
+    assert first == second
+    assert first["players"] == ["greedy", "greedy"]
+    assert first["teams"][0] == [{"pokemon": "pikachu", "moves": ["thunderbolt"]}]
+    assert first["winner"] in (0, 1)
+    assert first["events"][-1]["kind"] == "win"
+
+
+def test_battle_runs_summary(db: str, upstream: Upstream) -> None:
+    result = invoke(
+        db,
+        "battle",
+        "--side1",
+        "pikachu:thunderbolt",
+        "--side2",
+        "pikachu:thunderbolt",
+        "--player2",
+        "random",
+        "--runs",
+        "4",
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith("4 battles (seeds 0-3): Side 1 (greedy) won ")
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--side1", "pikachu", "--side2", "pikachu", "--player1", "genius"],
+        ["--side1", "pikachu", *["--side2", "pikachu"] * 7],
+    ],
+)
+def test_battle_validates_players_and_team_size_before_lookups(
+    db: str, upstream: Upstream, args: list[str]
+) -> None:
+    result = invoke(db, "battle", *args)
+
+    assert result.exit_code == EXIT_INVALID_INPUT
+    assert upstream.requests == []
 
 
 def test_team_prints_analysis(db: str, upstream: Upstream) -> None:
@@ -234,7 +466,7 @@ class FakeChat:
 
     calls: list[dict[str, object]] = []
     error: Exception | None = None
-    data: dict[str, Any] | None = None
+    data: Any = None
     analyzed: list[str] | None = None
 
     def __init__(self, settings: object = None) -> None:
@@ -251,6 +483,8 @@ class FakeChat:
             arguments = FakeChat.arguments_for(tool)
             tool_calls.append(ToolCall(tool.name, arguments, tool.handler(**arguments)))
         data = FakeChat.data if kwargs.get("output_schema") else None
+        if callable(data):
+            data = data(kwargs["output_schema"])
         return Completion(
             "Pikachu is Electric-type.",
             "fake-model",
@@ -282,6 +516,165 @@ def fake_chat(
     monkeypatch.setattr(cli, "OpenAIChat", FakeChat)
     monkeypatch.setenv("POKEVERSE_DB", str(tmp_path / "ask.db"))
     return FakeChat
+
+
+AGENT_BATTLE = [
+    "battle",
+    "--side1",
+    "pikachu:thunderbolt,quick-attack",
+    "--side2",
+    "pikachu:thunderbolt",
+    "--player1",
+    "agent",
+    "--no-analysis",
+]
+
+
+def analysis_or_decision(schema: Any) -> dict[str, Any]:
+    properties = schema.schema["properties"]
+    if schema.name == "opponent_analysis":
+        foe = properties["threats"]["items"]["properties"]["foe"]["enum"]
+        own = properties["counters"]["items"]["properties"]["answer"]["enum"]
+        return {
+            "threats": [{"foe": f, "danger": "high", "reason": "Mirror."} for f in foe],
+            "counters": [{"threat": foe[0], "answer": own[0], "reason": "Priority."}],
+            "plan": "Lead with Pikachu.",
+        }
+    return {"action": properties["action"]["enum"][-1], "reason": "Last option."}
+
+
+def test_battle_briefs_the_agent_with_a_pre_battle_analysis(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = analysis_or_decision
+
+    result = runner.invoke(app, AGENT_BATTLE[:-1])
+
+    assert result.exit_code == 0
+    assert "Side 1 pre-battle analysis:" in result.stdout
+    assert "  threat foe-0:pikachu [high]: Mirror." in result.stdout
+    assert "  plan: Lead with Pikachu." in result.stdout
+    first, *decisions = fake_chat.calls
+    assert first["output_schema"].name == "opponent_analysis"
+    assert "Matchup table" in first["prompt"]
+    assert all("Pre-battle analysis" in call["prompt"] for call in decisions)
+    assert "(+15 analysis)" in result.stdout
+
+
+def test_scout_reports_threats_counters_and_the_briefing(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = analysis_or_decision
+
+    result = runner.invoke(
+        app, ["scout", "--side1", "pikachu:thunderbolt,quick-attack", "--side2", "pikachu:surf"]
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "  threat foe-0:pikachu [high]: Mirror." in result.stdout
+    assert "counter own-0:pikachu -> foe-0:pikachu" in result.stdout
+    assert "Briefing handed to the Battle Strategy Agent:" in result.stdout
+
+
+def test_scout_json(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = analysis_or_decision
+
+    result = runner.invoke(
+        app, ["scout", "--side1", "pikachu:thunderbolt", "--side2", "pikachu:thunderbolt", "--json"]
+    )
+
+    report = json.loads(result.stdout)
+    assert report["threats"][0]["foe"] == "foe-0:pikachu"
+    assert report["plan"] == "Lead with Pikachu."
+
+
+def test_battle_with_the_agent_prints_its_decisions(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = {"action": "move-1:quick-attack", "reason": "Priority hits first."}
+
+    result = runner.invoke(app, AGENT_BATTLE)
+
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[0].startswith("Side 1 (agent): Pikachu")
+    assert "Pikachu uses Quick Attack." in result.stdout
+    assert "  turn 1, side 1: move-1:quick-attack — Priority hits first." in result.stdout
+    assert "fallbacks: 0." in result.stdout
+    assert all(call["system"] for call in fake_chat.calls)
+
+
+def test_battle_agent_falls_back_to_greedy_on_invalid_replies(
+    fake_chat: type[FakeChat],
+) -> None:
+    fake_chat.data = {"action": "move-7:splash", "reason": "?"}
+
+    result = runner.invoke(app, [*AGENT_BATTLE, "--json"])
+
+    assert result.exit_code == 0
+    report = json.loads(result.stdout)
+    assert report["decisions"]
+    assert all(decision["fallback"] for decision in report["decisions"])
+    assert all(decision["action"] == "move-0:thunderbolt" for decision in report["decisions"])
+    assert report["agent_tokens"] == 15 * len(report["decisions"])
+
+
+def test_battle_agent_auth_errors_exit_with_auth_code(fake_chat: type[FakeChat]) -> None:
+    from pokeverse.llm import LlmAuthError
+
+    fake_chat.error = LlmAuthError("no key")
+
+    result = runner.invoke(app, AGENT_BATTLE)
+
+    assert result.exit_code == EXIT_AUTH
+
+
+MIRROR = BattleScenario("mirror", ("pikachu",), ("pikachu",), "Pikachu mirror.")
+
+
+@pytest.fixture
+def mirror_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "BATTLE_SCENARIOS", (MIRROR,))
+
+
+def decision_or_review(schema: Any) -> dict[str, Any]:
+    properties = schema.schema["properties"]
+    if schema.name == "battle_review":
+        ids = properties["lessons"]["items"]["properties"]["evidence"]["items"]["enum"]
+        return {"lessons": [{"text": "Lead with damage.", "evidence": ids[:1]}]}
+    return {"action": properties["action"]["enum"][-1], "reason": "Last option."}
+
+
+def test_battle_eval_reports_win_rate_with_interval(
+    db: str, upstream: Upstream, mirror_scenario: None
+) -> None:
+    result = invoke(db, "battle-eval", "--system", "greedy", "--seeds", "4")
+
+    assert result.exit_code == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0].startswith("Scenario mirror: pikachu vs pikachu (side 2: greedy).")
+    assert lines[1].startswith("  greedy")
+    assert "/4" in lines[1] and "tokens/battle       0" in lines[1]
+    assert result.stderr.count("[mirror] greedy seed") == 4
+
+
+def test_battle_eval_json_and_validation(
+    db: str, upstream: Upstream, mirror_scenario: None
+) -> None:
+    report = json.loads(
+        invoke(db, "battle-eval", "--system", "greedy", "--seeds", "2", "--json").stdout
+    )
+    assert report["seeds"] == [0, 1]
+    assert report["scenarios"]["mirror"][0]["battles"] == 2
+
+    assert invoke(db, "battle-eval", "--system", "genius").exit_code == EXIT_INVALID_INPUT
+    assert invoke(db, "battle-eval", "--scenario", "nope").exit_code == EXIT_INVALID_INPUT
+
+
+def test_battle_feedback_skips_testing_when_there_is_nothing_to_learn(
+    fake_chat: type[FakeChat], mirror_scenario: None
+) -> None:
+    fake_chat.data = decision_or_review
+
+    result = runner.invoke(app, ["battle-feedback", "--scenario", "mirror", "--train", "2"])
+
+    assert result.exit_code == 0, result.stderr
+    assert "Training (seeds 0-1):" in result.stdout
+    assert "No lessons: no mistakes were detected" in result.stdout
+    assert "Test (seeds" not in result.stdout
 
 
 def test_ask_prints_answer(fake_chat: type[FakeChat]) -> None:

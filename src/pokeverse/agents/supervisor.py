@@ -8,7 +8,7 @@ from pokeverse.agents.context import SharedContext, with_context
 from pokeverse.agents.optimizer import TeamOptimizationAgent
 from pokeverse.agents.research import ChatModel, ResearchAgent
 from pokeverse.agents.team_builder import TeamCompositionAgent
-from pokeverse.agents.tools import normalize_pokemon_identifier
+from pokeverse.agents.tools import normalize_identifier
 from pokeverse.catalog import PokemonCatalog, PokemonNotInCatalogError
 from pokeverse.llm import Completion, LlmRequestError, Tool
 from pokeverse.teams import MAX_TEAM_SIZE, Team
@@ -190,9 +190,7 @@ class Supervisor:
         self, members: list[str], goal: str, keep: list[str], notes: str, context: SharedContext
     ) -> Any:
         try:
-            team = Team(
-                tuple(self._catalog.get(normalize_pokemon_identifier(name)) for name in members)
-            )
+            team = Team(tuple(self._catalog.get(normalize_identifier(name)) for name in members))
         except PokemonNotInCatalogError as error:
             raise ValueError(f"cannot optimize: {error}") from error
         return self._optimizer.optimize(

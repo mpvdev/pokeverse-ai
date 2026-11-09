@@ -3,6 +3,22 @@
   "name": "charizard",
   "height": 17,
   "weight": 905,
+  "moves": [
+    {"move": {"name": "flamethrower", "url": "https://pokeapi.co/api/v2/move/53/"}},
+    {"move": {"name": "air-slash", "url": "https://pokeapi.co/api/v2/move/403/"}},
+    {"move": {"name": "dragon-claw", "url": "https://pokeapi.co/api/v2/move/337/"}},
+    {"move": {"name": "earthquake", "url": "https://pokeapi.co/api/v2/move/89/"}},
+    {"move": {"name": "swords-dance", "url": "https://pokeapi.co/api/v2/move/14/"}},
+    {"move": {"name": "fire-fang", "url": "https://pokeapi.co/api/v2/move/424/"}}
+  ],
+  "stats": [
+    {"base_stat": 78, "effort": 0, "stat": {"name": "hp", "url": "https://pokeapi.co/api/v2/stat/1/"}},
+    {"base_stat": 84, "effort": 0, "stat": {"name": "attack", "url": "https://pokeapi.co/api/v2/stat/2/"}},
+    {"base_stat": 78, "effort": 0, "stat": {"name": "defense", "url": "https://pokeapi.co/api/v2/stat/3/"}},
+    {"base_stat": 109, "effort": 3, "stat": {"name": "special-attack", "url": "https://pokeapi.co/api/v2/stat/4/"}},
+    {"base_stat": 85, "effort": 0, "stat": {"name": "special-defense", "url": "https://pokeapi.co/api/v2/stat/5/"}},
+    {"base_stat": 100, "effort": 0, "stat": {"name": "speed", "url": "https://pokeapi.co/api/v2/stat/6/"}}
+  ],
   "types": [
     {
       "slot": 1,

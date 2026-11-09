@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pokeverse.agents.research import ChatModel
-from pokeverse.agents.tools import make_catalog_tools, make_team_tools, normalize_pokemon_identifier
+from pokeverse.agents.tools import make_catalog_tools, make_team_tools, normalize_identifier
 from pokeverse.catalog import PokemonCatalog, PokemonNotInCatalogError
 from pokeverse.catalog.models import NAME_PATTERN
 from pokeverse.llm import Completion, LlmRequestError, OutputSchema
@@ -159,7 +159,7 @@ class TeamCompositionAgent:
             ) from error
         try:
             members = tuple(
-                self._catalog.get(normalize_pokemon_identifier(m.name)) for m in proposal.members
+                self._catalog.get(normalize_identifier(m.name)) for m in proposal.members
             )
         except PokemonNotInCatalogError as error:
             raise LlmRequestError(

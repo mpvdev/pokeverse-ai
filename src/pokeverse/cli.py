@@ -2,7 +2,8 @@
 
 import json
 import os
-from collections.abc import Iterator
+import random
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -14,16 +15,35 @@ from dotenv import find_dotenv, load_dotenv
 
 from pokeverse.agents import (
     POKEDEX_ANSWER_SCHEMA,
+    BattleStrategyAgent,
+    OpponentAnalysis,
+    OpponentAnalysisAgent,
     PokedexAnswer,
     ResearchAgent,
     Supervisor,
     TeamCompositionAgent,
     TeamOptimizationAgent,
     make_catalog_tools,
-    normalize_pokemon_identifier,
+    normalize_identifier,
 )
 from pokeverse.agents.supervisor import OptimizeMode
+from pokeverse.battles import (
+    MAX_MOVES,
+    PLAYER_NAMES,
+    Battler,
+    BattleResult,
+    Player,
+    battle_stats,
+    calculate_damage,
+    damage_range,
+    default_battler,
+    load_battler,
+    make_player,
+    run_battle,
+)
 from pokeverse.catalog import (
+    Move,
+    MoveNotInCatalogError,
     Pokemon,
     PokemonCatalog,
     PokemonNotInCatalogError,
@@ -31,7 +51,17 @@ from pokeverse.catalog import (
     UpstreamUnavailableError,
 )
 from pokeverse.catalog.pokeapi import PokeApiClient
+from pokeverse.catalog.type_chart import effectiveness
 from pokeverse.evals import RESEARCH_CASES, EvalResult, run_case
+from pokeverse.evals.battles import (
+    BATTLE_SCENARIOS,
+    BATTLE_SYSTEMS,
+    LLM_SYSTEMS,
+    BattleScenario,
+    SystemReport,
+    feedback_experiment,
+    run_system,
+)
 from pokeverse.evals.compare import COMPARE_CASES, SYSTEMS
 from pokeverse.evals.compare import run_case as compare_case
 from pokeverse.llm import (
@@ -105,19 +135,75 @@ def open_catalog(settings: Settings, *, offline: bool) -> Iterator[PokemonCatalo
             yield PokemonCatalog(repository, client)
 
 
-def parse_cli_identifier(raw: str) -> str | int:
-    stripped = raw.strip()
-    return int(stripped) if stripped.isdigit() else stripped
-
-
 def format_pokemon(pokemon: Pokemon) -> str:
     types = " / ".join(pokemon_type.value.title() for pokemon_type in pokemon.types)
     return f"#{pokemon.pokedex_id:04d} {pokemon.display_name} — {types}"
 
 
+def format_stats(pokemon: Pokemon) -> str:
+    s = pokemon.stats
+    return (
+        f"HP {s.hp} / Atk {s.attack} / Def {s.defense} / SpA {s.special_attack} / "
+        f"SpD {s.special_defense} / Spe {s.speed} (total {s.total})"
+    )
+
+
+def format_move(move: Move) -> str:
+    power = move.power if move.power is not None else "—"
+    accuracy = f"{move.accuracy}%" if move.accuracy is not None else "never misses"
+    priority = f"{move.priority:+d}" if move.priority else "0"
+    return (
+        f"#{move.move_id:04d} {move.display_name} — {move.type.value.title()}, "
+        f"{move.damage_class.value}, power {power}, accuracy {accuracy}, "
+        f"priority {priority}, PP {move.pp}"
+    )
+
+
 def fail(message: str, code: int) -> typer.Exit:
     typer.echo(f"Error: {message}", err=True)
     return typer.Exit(code)
+
+
+def resolve_battler(catalog: PokemonCatalog, pokemon: str, moves: list[str]) -> Battler:
+    identifier = normalize_identifier(pokemon)
+    if not moves:
+        return default_battler(catalog, identifier)
+    move_names = [normalize_identifier(move) for move in moves]
+    if any(isinstance(name, int) for name in move_names):
+        raise ValueError("moves must be given by name")
+    return load_battler(catalog, identifier, cast(list[str], move_names))
+
+
+def parse_member(spec: str) -> tuple[str, list[str]]:
+    pokemon, _, moves = spec.partition(":")
+    return pokemon, [move for move in moves.split(",") if move.strip()]
+
+
+def format_battler(battler: Battler) -> str:
+    moves = ", ".join(move.display_name for move in battler.moves)
+    return f"{battler.pokemon.display_name} [{moves}]"
+
+
+BATTLE_PLAYERS = (*PLAYER_NAMES, "agent")
+
+
+def make_battle_player(
+    name: str, seed: str, chat: OpenAIChat | None, analysis: OpponentAnalysis | None
+) -> Player:
+    if name == "agent":
+        if chat is None:
+            raise ValueError("the agent player needs an LLM client")
+        return BattleStrategyAgent(chat, analysis=analysis)
+    return make_player(name, random.Random(seed))
+
+
+def print_analysis_report(analysis: OpponentAnalysis) -> None:
+    for threat in analysis.threats:
+        typer.echo(f"  threat {threat.foe} [{threat.danger}]: {threat.reason}")
+    for counter in analysis.counters:
+        status = "verified" if counter.verified else "NOT supported by the matchups"
+        typer.echo(f"  counter {counter.answer} -> {counter.threat} ({status}): {counter.reason}")
+    typer.echo(f"  plan: {analysis.plan}")
 
 
 @app.command("pokemon")
@@ -132,7 +218,7 @@ def pokemon_command(
     """Look up a Pokémon, importing it from PokéAPI if not stored locally."""
     settings: Settings = ctx.obj
     try:
-        identifier = parse_cli_identifier(name_or_id)
+        identifier = normalize_identifier(name_or_id)
         with open_catalog(settings, offline=offline) as catalog:
             pokemon = catalog.get(identifier)
     except ValueError as error:
@@ -142,7 +228,11 @@ def pokemon_command(
     except UpstreamUnavailableError as error:
         raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
 
-    typer.echo(json.dumps(pokemon.to_dict()) if as_json else format_pokemon(pokemon))
+    if as_json:
+        typer.echo(json.dumps(pokemon.to_dict()))
+    else:
+        typer.echo(format_pokemon(pokemon))
+        typer.echo(format_stats(pokemon))
 
 
 @app.command("list")
@@ -164,6 +254,503 @@ def list_command(
             typer.echo(format_pokemon(pokemon))
 
 
+@app.command("move")
+def move_command(
+    ctx: typer.Context,
+    name_or_id: Annotated[str, typer.Argument(help="Move name (e.g. 'Swords Dance') or id.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Look up a move, importing it from PokéAPI if not stored locally."""
+    settings: Settings = ctx.obj
+    try:
+        identifier = normalize_identifier(name_or_id)
+        with open_catalog(settings, offline=offline) as catalog:
+            move = catalog.get_move(identifier)
+    except ValueError as error:
+        raise fail(str(error), EXIT_INVALID_INPUT) from error
+    except MoveNotInCatalogError as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+    except UpstreamUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+
+    typer.echo(json.dumps(move.to_dict()) if as_json else format_move(move))
+
+
+@app.command("learnset")
+def learnset_command(
+    ctx: typer.Context,
+    name_or_id: Annotated[str, typer.Argument(help="Pokémon name (e.g. pikachu) or Pokédex id.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """List the moves a Pokémon can learn (names only; no move lookups)."""
+    settings: Settings = ctx.obj
+    try:
+        identifier = normalize_identifier(name_or_id)
+        with open_catalog(settings, offline=offline) as catalog:
+            pokemon = catalog.get(identifier)
+    except ValueError as error:
+        raise fail(str(error), EXIT_INVALID_INPUT) from error
+    except PokemonNotInCatalogError as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+    except UpstreamUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+
+    names = sorted(pokemon.learnset)
+    if as_json:
+        typer.echo(json.dumps({"pokemon": pokemon.name, "learnset": names}))
+    else:
+        plural = "" if len(names) == 1 else "s"
+        typer.echo(f"{format_pokemon(pokemon)} — {len(names)} learnable move{plural}")
+        typer.echo(", ".join(names))
+
+
+@app.command("moveset")
+def moveset_command(
+    ctx: typer.Context,
+    pokemon: Annotated[str, typer.Argument(help="Pokémon name or Pokédex id.")],
+    moves: Annotated[
+        list[str] | None,
+        typer.Argument(help=f"1-{MAX_MOVES} move names; omit for the default moveset."),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Check a battle moveset, or show the default one (first use fetches every learnable move)."""
+    settings: Settings = ctx.obj
+    try:
+        if moves and len(moves) > MAX_MOVES:
+            raise ValueError(f"a battler must have between 1 and {MAX_MOVES} moves")
+        with open_catalog(settings, offline=offline) as catalog:
+            battler = resolve_battler(catalog, pokemon, moves or [])
+    except ValueError as error:
+        raise fail(str(error), EXIT_INVALID_INPUT) from error
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+    except UpstreamUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+
+    if as_json:
+        typer.echo(json.dumps(battler.to_dict()))
+    else:
+        typer.echo(format_pokemon(battler.pokemon))
+        for move in battler.moves:
+            typer.echo(f"  {format_move(move)}")
+
+
+@app.command("damage")
+def damage_command(
+    ctx: typer.Context,
+    attacker: Annotated[str, typer.Argument(help="Attacking Pokémon.")],
+    move: Annotated[str, typer.Argument(help="Move used by the attacker.")],
+    defender: Annotated[str, typer.Argument(help="Defending Pokémon.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Damage range of one move at level 50 (no critical hit), plus the critical-hit maximum."""
+    settings: Settings = ctx.obj
+    try:
+        with open_catalog(settings, offline=offline) as catalog:
+            source = catalog.get(normalize_identifier(attacker))
+            target = catalog.get(normalize_identifier(defender))
+            used = catalog.get_move(normalize_identifier(move))
+        low, high = damage_range(source, target, used)
+        critical = calculate_damage(source, target, used, critical=True)
+    except ValueError as error:
+        raise fail(str(error), EXIT_INVALID_INPUT) from error
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+    except UpstreamUnavailableError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
+
+    hp = battle_stats(target.stats).hp
+    multiplier = effectiveness(used.type, target.types)
+    if as_json:
+        result = {
+            "attacker": source.name,
+            "move": used.name,
+            "defender": target.name,
+            "min": low,
+            "max": high,
+            "critical_max": critical,
+            "defender_hp": hp,
+            "effectiveness": multiplier,
+            "stab": used.type in source.types,
+        }
+        typer.echo(json.dumps(result))
+        return
+    stab = ", STAB" if used.type in source.types else ""
+    typer.echo(
+        f"{source.display_name} {used.display_name} vs {target.display_name}: "
+        f"{low}-{high} damage ({low / hp:.0%}-{high / hp:.0%} of {hp} HP), "
+        f"{multiplier:g}x{stab}; critical hit up to {critical}"
+    )
+
+
+@app.command("battle")
+def battle_command(
+    ctx: typer.Context,
+    side1: Annotated[
+        list[str],
+        typer.Option(
+            "--side1",
+            help="Side 1 member: 'name' (default moveset) or 'name:move,move'; repeat per member.",
+        ),
+    ],
+    side2: Annotated[
+        list[str],
+        typer.Option("--side2", help="A side 2 member, same format as --side1."),
+    ],
+    player1: Annotated[
+        str, typer.Option("--player1", help=f"Side 1 player: {', '.join(BATTLE_PLAYERS)}.")
+    ] = "greedy",
+    player2: Annotated[
+        str, typer.Option("--player2", help=f"Side 2 player: {', '.join(BATTLE_PLAYERS)}.")
+    ] = "greedy",
+    seed: Annotated[int, typer.Option("--seed", help="Random seed of the first battle.")] = 0,
+    runs: Annotated[
+        int, typer.Option("--runs", min=1, help="Number of battles (seeds seed, seed+1, ...).")
+    ] = 1,
+    analysis: Annotated[
+        bool,
+        typer.Option(
+            "--analysis/--no-analysis",
+            help="Brief agent players with a pre-battle Opponent Analysis Agent run.",
+        ),
+    ] = True,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Simulate battles; players are code (greedy, random) or the Battle Strategy Agent (LLM)."""
+    settings: Settings = ctx.obj
+    names = (player1, player2)
+    results: list[tuple[int, BattleResult, list[BattleStrategyAgent]]] = []
+    analyses: dict[int, OpponentAnalysis] = {}
+    try:
+        with llm_errors():
+            for name in names:
+                if name not in BATTLE_PLAYERS:
+                    raise ValueError(
+                        f"unknown player {name!r}; choose from {', '.join(BATTLE_PLAYERS)}"
+                    )
+            for side in (side1, side2):
+                if len(side) > MAX_TEAM_SIZE:
+                    raise ValueError(
+                        f"a battle team must have between 1 and {MAX_TEAM_SIZE} battlers"
+                    )
+            chat = OpenAIChat(LlmSettings.from_env()) if "agent" in names else None
+            with open_catalog(settings, offline=offline) as catalog:
+                teams = [
+                    [resolve_battler(catalog, *parse_member(spec)) for spec in side]
+                    for side in (side1, side2)
+                ]
+            if chat is not None and analysis:
+                for side, name in enumerate(names):
+                    if name == "agent":
+                        analyst = OpponentAnalysisAgent(chat)
+                        analyses[side] = analyst.analyze(teams[side], teams[1 - side])
+            for battle_seed in range(seed, seed + runs):
+                players = (
+                    make_battle_player(player1, f"{battle_seed}:1", chat, analyses.get(0)),
+                    make_battle_player(player2, f"{battle_seed}:2", chat, analyses.get(1)),
+                )
+                result = run_battle(teams[0], teams[1], players, random.Random(battle_seed))
+                agents = [p for p in players if isinstance(p, BattleStrategyAgent)]
+                results.append((battle_seed, result, agents))
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+
+    team_names = [
+        [{"pokemon": b.pokemon.name, "moves": [m.name for m in b.moves]} for b in team]
+        for team in teams
+    ]
+    agent_tokens = sum(agent.total_tokens for _, _, agents in results for agent in agents)
+    analysis_tokens = sum(a.completion.total_tokens for a in analyses.values())
+    fallbacks = sum(agent.fallbacks for _, _, agents in results for agent in agents)
+    if runs == 1:
+        battle_seed, result, agents = results[0]
+        decisions = sorted(
+            (decision for agent in agents for decision in agent.decisions),
+            key=lambda decision: (decision.turn, decision.side),
+        )
+        if as_json:
+            report = {
+                "seed": battle_seed,
+                "players": list(names),
+                "teams": team_names,
+                "winner": result.winner,
+                "turns": result.turns,
+                "events": [event.to_dict() for event in result.events],
+                "decisions": [decision.to_dict() for decision in decisions],
+                "agent_tokens": agent_tokens,
+                "analyses": {str(side): a.to_dict() for side, a in analyses.items()},
+                "analysis_tokens": analysis_tokens,
+            }
+            typer.echo(json.dumps(report))
+            return
+        for index, team in enumerate(teams):
+            members = ", ".join(format_battler(battler) for battler in team)
+            typer.echo(f"Side {index + 1} ({names[index]}): {members}")
+        for side, side_analysis in analyses.items():
+            typer.echo(f"Side {side + 1} pre-battle analysis:")
+            print_analysis_report(side_analysis)
+        for event in result.events:
+            typer.echo(f"[{event.turn}] {event.describe()}")
+        if result.winner is None:
+            typer.echo(f"Draw after {result.turns} turns.")
+        else:
+            winner = result.winner
+            typer.echo(f"Winner: Side {winner + 1} ({names[winner]}) after {result.turns} turns.")
+        if decisions:
+            typer.echo("Agent decisions:")
+            for decision in decisions:
+                marker = " [fallback: greedy]" if decision.fallback else ""
+                typer.echo(
+                    f"  turn {decision.turn}, side {decision.side + 1}: "
+                    f"{decision.action}{marker} — {decision.reason}"
+                )
+            typer.echo(
+                f"Agent tokens: {agent_tokens} (+{analysis_tokens} analysis); "
+                f"fallbacks: {fallbacks}."
+            )
+        return
+
+    wins = [sum(1 for _, r, _ in results if r.winner == side) for side in (0, 1)]
+    draws = runs - sum(wins)
+    average = sum(r.turns for _, r, _ in results) / runs
+    if as_json:
+        report = {
+            "runs": runs,
+            "players": list(names),
+            "teams": team_names,
+            "wins": wins,
+            "draws": draws,
+            "average_turns": average,
+            "agent_tokens": agent_tokens,
+            "agent_fallbacks": fallbacks,
+            "analysis_tokens": analysis_tokens,
+            "results": [{"seed": s, "winner": r.winner, "turns": r.turns} for s, r, _ in results],
+        }
+        typer.echo(json.dumps(report))
+        return
+    typer.echo(
+        f"{runs} battles (seeds {seed}-{seed + runs - 1}): "
+        f"Side 1 ({names[0]}) won {wins[0]}, Side 2 ({names[1]}) won {wins[1]}, "
+        f"draws {draws}; average {average:.1f} turns."
+    )
+    if "agent" in names:
+        typer.echo(
+            f"Agent tokens: {agent_tokens} (+{analysis_tokens} analysis); fallbacks: {fallbacks}."
+        )
+
+
+@app.command("scout")
+def scout_command(
+    ctx: typer.Context,
+    side1: Annotated[
+        list[str],
+        typer.Option("--side1", help="Our member: 'name' or 'name:move,move'; repeat per member."),
+    ],
+    side2: Annotated[
+        list[str],
+        typer.Option("--side2", help="An opposing member, same format as --side1."),
+    ],
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+    show_usage: Annotated[
+        bool, typer.Option("--usage", help="Print token usage to stderr.")
+    ] = False,
+) -> None:
+    """Ask the Opponent Analysis Agent to rank side 2's threats to side 1; code checks counters."""
+    settings: Settings = ctx.obj
+    try:
+        with llm_errors():
+            for side in (side1, side2):
+                if len(side) > MAX_TEAM_SIZE:
+                    raise ValueError(
+                        f"a battle team must have between 1 and {MAX_TEAM_SIZE} battlers"
+                    )
+            chat = OpenAIChat(LlmSettings.from_env())
+            with open_catalog(settings, offline=offline) as catalog:
+                own = [resolve_battler(catalog, *parse_member(spec)) for spec in side1]
+                foe = [resolve_battler(catalog, *parse_member(spec)) for spec in side2]
+            result = OpponentAnalysisAgent(chat).analyze(own, foe)
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+
+    if as_json:
+        typer.echo(json.dumps(result.to_dict()))
+    else:
+        typer.echo(f"Side 2 threats to side 1 ({', '.join(b.pokemon.name for b in own)}):")
+        print_analysis_report(result)
+        typer.echo("\nBriefing handed to the Battle Strategy Agent:")
+        typer.echo(result.briefing())
+    if show_usage:
+        print_usage(result.completion)
+
+
+def select_scenarios(ids: list[str] | None) -> tuple[BattleScenario, ...]:
+    if not ids:
+        return BATTLE_SCENARIOS
+    known = {scenario.id: scenario for scenario in BATTLE_SCENARIOS}
+    unknown = [scenario_id for scenario_id in ids if scenario_id not in known]
+    if unknown:
+        raise ValueError(f"unknown scenario(s) {unknown}; known: {sorted(known)}")
+    return tuple(known[scenario_id] for scenario_id in ids)
+
+
+def load_scenario(
+    catalog: PokemonCatalog, scenario: BattleScenario
+) -> tuple[list[Battler], list[Battler]]:
+    return (
+        [resolve_battler(catalog, name, []) for name in scenario.side1],
+        [resolve_battler(catalog, name, []) for name in scenario.side2],
+    )
+
+
+def report_line(report: SystemReport) -> str:
+    low, high = report.interval
+    return (
+        f"  {report.system:<15} {report.wins:>2}/{report.battles:<3} "
+        f"{report.win_rate:>4.0%} ({low:.0%}-{high:.0%})  "
+        f"turns {report.average_turns:4.1f}  mistakes/battle {report.mistakes_per_battle:4.2f}  "
+        f"tokens/battle {report.tokens_per_battle:7.0f}  fallbacks {report.fallbacks}"
+    )
+
+
+def progress_to_stderr(prefix: str) -> Callable[[str], None]:
+    return lambda message: typer.echo(f"[{prefix}] {message}", err=True)
+
+
+@app.command("battle-eval")
+def battle_eval_command(
+    ctx: typer.Context,
+    scenario_ids: Annotated[
+        list[str] | None, typer.Option("--scenario", help="Scenario id (repeatable).")
+    ] = None,
+    systems: Annotated[
+        list[str] | None,
+        typer.Option("--system", help=f"Side 1 player (repeatable): {', '.join(BATTLE_SYSTEMS)}."),
+    ] = None,
+    seeds: Annotated[int, typer.Option("--seeds", min=1, help="Battles per system.")] = 5,
+    seed_start: Annotated[int, typer.Option("--seed-start", help="First seed.")] = 0,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Win rate (95% CI), mistakes and tokens of each system against greedy; LLM systems cost."""
+    settings: Settings = ctx.obj
+    chosen = tuple(systems or BATTLE_SYSTEMS)
+    battle_seeds = range(seed_start, seed_start + seeds)
+    reports: dict[str, list[SystemReport]] = {}
+    try:
+        with llm_errors():
+            unknown = [system for system in chosen if system not in BATTLE_SYSTEMS]
+            if unknown:
+                raise ValueError(f"unknown system(s) {unknown}; known: {list(BATTLE_SYSTEMS)}")
+            scenarios = select_scenarios(scenario_ids)
+            needs_llm = any(system in LLM_SYSTEMS for system in chosen)
+            chat = OpenAIChat(LlmSettings.from_env()) if needs_llm else None
+            for scenario in scenarios:
+                with open_catalog(settings, offline=offline) as catalog:
+                    team, opponent = load_scenario(catalog, scenario)
+                reports[scenario.id] = [
+                    run_system(
+                        system,
+                        team,
+                        opponent,
+                        battle_seeds,
+                        chat,
+                        progress=progress_to_stderr(scenario.id),
+                    )
+                    for system in chosen
+                ]
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+
+    if as_json:
+        payload = {
+            scenario_id: [report.to_dict() for report in scenario_reports]
+            for scenario_id, scenario_reports in reports.items()
+        }
+        typer.echo(json.dumps({"seeds": list(battle_seeds), "scenarios": payload}))
+        return
+    for scenario in scenarios:
+        typer.echo(
+            f"Scenario {scenario.id}: {', '.join(scenario.side1)} vs "
+            f"{', '.join(scenario.side2)} (side 2: greedy). {scenario.description}"
+        )
+        for report in reports[scenario.id]:
+            typer.echo(report_line(report))
+
+
+@app.command("battle-feedback")
+def battle_feedback_command(
+    ctx: typer.Context,
+    scenario_id: Annotated[str, typer.Option("--scenario", help="Scenario id.")] = "bulk",
+    train: Annotated[int, typer.Option("--train", min=1, help="Training battles.")] = 5,
+    test: Annotated[int, typer.Option("--test", min=1, help="Test battles per system.")] = 5,
+    seed_start: Annotated[int, typer.Option("--seed-start", help="First seed.")] = 0,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Learn lessons from the agent's mistakes on training seeds; measure them on new seeds."""
+    settings: Settings = ctx.obj
+    train_seeds = range(seed_start, seed_start + train)
+    test_seeds = range(seed_start + train, seed_start + train + test)
+    try:
+        with llm_errors():
+            (scenario,) = select_scenarios([scenario_id])
+            chat = OpenAIChat(LlmSettings.from_env())
+            with open_catalog(settings, offline=offline) as catalog:
+                team, opponent = load_scenario(catalog, scenario)
+            report = feedback_experiment(
+                team,
+                opponent,
+                chat,
+                train_seeds,
+                test_seeds,
+                progress=progress_to_stderr(scenario.id),
+            )
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+
+    if as_json:
+        typer.echo(json.dumps(report.to_dict()))
+        return
+    typer.echo(f"Training (seeds {train_seeds.start}-{train_seeds.stop - 1}):")
+    typer.echo(report_line(report.training))
+    for mistake in report.training.mistakes:
+        typer.echo(f"    [{mistake.kind}] {mistake.describe()}")
+    if not report.review.lessons:
+        typer.echo("No lessons: no mistakes were detected, so the test battles were skipped.")
+        return
+    typer.echo(f"Lessons ({report.review_tokens} tokens):")
+    for lesson in report.review.lessons:
+        typer.echo(f"  - {lesson.text} (evidence: {', '.join(lesson.evidence)})")
+    typer.echo(f"Test (seeds {test_seeds.start}-{test_seeds.stop - 1}):")
+    if report.baseline:
+        typer.echo(report_line(report.baseline))
+    if report.with_lessons:
+        typer.echo(report_line(report.with_lessons))
+
+
 @app.command("team")
 def team_command(
     ctx: typer.Context,
@@ -181,7 +768,7 @@ def team_command(
         raise fail(f"a team can have at most {MAX_TEAM_SIZE} Pokémon", EXIT_INVALID_INPUT)
     try:
         with open_catalog(settings, offline=offline) as catalog:
-            members = tuple(catalog.get(normalize_pokemon_identifier(name)) for name in names)
+            members = tuple(catalog.get(normalize_identifier(name)) for name in names)
         analysis = analyze_team(Team(members))
     except ValueError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
@@ -262,7 +849,7 @@ def optimize_command(
         with llm_errors():
             chat = OpenAIChat(LlmSettings.from_env())
             with open_catalog(settings, offline=False) as catalog:
-                team = Team(tuple(catalog.get(normalize_pokemon_identifier(n)) for n in names))
+                team = Team(tuple(catalog.get(normalize_identifier(n)) for n in names))
                 result = TeamOptimizationAgent(chat, catalog).optimize(
                     team, goal=goal, keep=keep or (), notes=notes
                 )

@@ -6,7 +6,7 @@ from typing import Any
 import httpx
 import pytest
 
-from pokeverse.catalog import Pokemon, PokemonType
+from pokeverse.catalog import BaseStats, DamageClass, Move, Pokemon, PokemonType
 from pokeverse.catalog.pokeapi import (
     DEFAULT_BASE_URL,
     PokeApiClient,
@@ -15,10 +15,30 @@ from pokeverse.catalog.pokeapi import (
     PokeApiResponseError,
     PokeApiUnavailableError,
     PokemonNotFoundError,
+    parse_move,
     parse_pokemon,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "pokeapi"
+
+PIKACHU = Pokemon(
+    25,
+    "pikachu",
+    (PokemonType.ELECTRIC,),
+    BaseStats(35, 55, 40, 50, 50, 90),
+    frozenset({"thunderbolt", "quick-attack", "iron-tail", "thunder-wave", "surf", "volt-tackle"}),
+)
+CHARIZARD = Pokemon(
+    6,
+    "charizard",
+    (PokemonType.FIRE, PokemonType.FLYING),
+    BaseStats(78, 84, 78, 109, 85, 100),
+    frozenset(
+        {"flamethrower", "air-slash", "dragon-claw", "earthquake", "swords-dance", "fire-fang"}
+    ),
+)
+THUNDERBOLT = Move(85, "thunderbolt", PokemonType.ELECTRIC, DamageClass.SPECIAL, 90, 100, 0, 15)
+SWORDS_DANCE = Move(14, "swords-dance", PokemonType.NORMAL, DamageClass.STATUS, None, None, 0, 20)
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -27,14 +47,19 @@ def load_fixture(name: str) -> dict[str, Any]:
     return json.loads((FIXTURES / f"{name}.json").read_text())
 
 
+def load_move_fixture(name: str) -> dict[str, Any]:
+    return load_fixture(f"move/{name}")
+
+
 def make_client(handler: Handler) -> PokeApiClient:
     return PokeApiClient(transport=httpx.MockTransport(handler))
 
 
 def fixture_handler(request: httpx.Request) -> httpx.Response:
-    name = request.url.path.rstrip("/").rsplit("/", 1)[-1]
-    aliases = {"25": "pikachu", "6": "charizard"}
-    fixture = FIXTURES / f"{aliases.get(name, name)}.json"
+    resource, name = request.url.path.rstrip("/").split("/")[-2:]
+    aliases = {"25": "pikachu", "6": "charizard", "85": "thunderbolt"}
+    folder = FIXTURES if resource == "pokemon" else FIXTURES / resource
+    fixture = folder / f"{aliases.get(name, name)}.json"
     if not fixture.exists():
         return httpx.Response(404, json={"status": 404, "message": "Not Found"})
     return httpx.Response(200, json=json.loads(fixture.read_text()))
@@ -44,13 +69,32 @@ def fixture_handler(request: httpx.Request) -> httpx.Response:
 
 
 def test_parse_single_type_pokemon() -> None:
-    assert parse_pokemon(load_fixture("pikachu")) == Pokemon(25, "pikachu", (PokemonType.ELECTRIC,))
+    assert parse_pokemon(load_fixture("pikachu")) == PIKACHU
 
 
 def test_parse_dual_type_pokemon() -> None:
-    assert parse_pokemon(load_fixture("charizard")) == Pokemon(
-        6, "charizard", (PokemonType.FIRE, PokemonType.FLYING)
-    )
+    assert parse_pokemon(load_fixture("charizard")) == CHARIZARD
+
+
+def test_parse_ignores_stat_order() -> None:
+    payload = load_fixture("charizard")
+    payload["stats"].reverse()
+
+    assert parse_pokemon(payload).stats == CHARIZARD.stats
+
+
+def test_parse_skips_move_names_that_are_not_slugs() -> None:
+    payload = load_fixture("pikachu")
+    payload["moves"].append({"move": {"name": "breakneck-blitz--physical", "url": ""}})
+
+    assert parse_pokemon(payload).learnset == PIKACHU.learnset
+
+
+def test_parse_accepts_an_empty_learnset() -> None:
+    payload = load_fixture("pikachu")
+    payload["moves"] = []
+
+    assert parse_pokemon(payload).learnset == frozenset()
 
 
 def test_parse_orders_types_by_slot() -> None:
@@ -79,6 +123,15 @@ def test_parse_skips_non_elemental_types() -> None:
         lambda p: p.update(types="electric"),
         lambda p: p.update(id="25"),
         lambda p: p.update(name="Pikachu"),
+        lambda p: p.pop("stats"),
+        lambda p: p.update(stats=[]),
+        lambda p: p["stats"].pop(),
+        lambda p: p["stats"][0].update(base_stat=0),
+        lambda p: p["stats"][0].update(base_stat="35"),
+        lambda p: p["stats"][0].pop("stat"),
+        lambda p: p.pop("moves"),
+        lambda p: p["moves"][0].pop("move"),
+        lambda p: p["moves"][0]["move"].update(name=None),
     ],
 )
 def test_parse_rejects_malformed_payload(mutate: Callable[[dict[str, Any]], Any]) -> None:
@@ -89,13 +142,55 @@ def test_parse_rejects_malformed_payload(mutate: Callable[[dict[str, Any]], Any]
         parse_pokemon(payload)
 
 
+# --- parse_move ------------------------------------------------------------
+
+
+def test_parse_damaging_move() -> None:
+    assert parse_move(load_move_fixture("thunderbolt")) == THUNDERBOLT
+
+
+def test_parse_status_move_with_null_power_and_accuracy() -> None:
+    assert parse_move(load_move_fixture("swords-dance")) == SWORDS_DANCE
+
+
+def test_parse_normalizes_pokeapi_quirks() -> None:
+    status = load_move_fixture("swords-dance")
+    status.update(power=60, accuracy=0)
+    damaging = load_move_fixture("thunderbolt")
+    damaging.update(power=0, accuracy=0)
+
+    assert (parse_move(status).power, parse_move(status).accuracy) == (None, None)
+    assert (parse_move(damaging).power, parse_move(damaging).accuracy) == (None, None)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda p: p.pop("power"),
+        lambda p: p.pop("damage_class"),
+        lambda p: p.update(type={"name": "shadow"}),
+        lambda p: p.update(pp=None),
+        lambda p: p.update(name="breakneck-blitz--physical"),
+        lambda p: p.update(damage_class=None),
+    ],
+)
+def test_parse_move_rejects_unsupported_or_malformed(
+    mutate: Callable[[dict[str, Any]], Any],
+) -> None:
+    payload = load_move_fixture("thunderbolt")
+    mutate(payload)
+
+    with pytest.raises(PokeApiResponseError):
+        parse_move(payload)
+
+
 # --- PokeApiClient ---------------------------------------------------------
 
 
 @pytest.mark.parametrize("identifier", ["pikachu", "Pikachu", "  PIKACHU ", 25])
 def test_fetch_pokemon_by_name_or_id(identifier: str | int) -> None:
     with make_client(fixture_handler) as client:
-        assert client.fetch_pokemon(identifier) == Pokemon(25, "pikachu", (PokemonType.ELECTRIC,))
+        assert client.fetch_pokemon(identifier) == PIKACHU
 
 
 def test_fetch_pokemon_sends_expected_request() -> None:
@@ -126,6 +221,24 @@ def test_fetch_pokemon_rejects_invalid_identifier(identifier: Any) -> None:
 def test_unknown_pokemon_raises_not_found() -> None:
     with make_client(fixture_handler) as client, pytest.raises(PokemonNotFoundError):
         client.fetch_pokemon("missingno")
+
+
+@pytest.mark.parametrize("identifier", ["thunderbolt", " Thunderbolt ", 85])
+def test_fetch_move_by_name_or_id(identifier: str | int) -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return fixture_handler(request)
+
+    with make_client(handler) as client:
+        assert client.fetch_move(identifier) == THUNDERBOLT
+    assert seen[0].startswith("/api/v2/move/")
+
+
+def test_unknown_move_raises_not_found() -> None:
+    with make_client(fixture_handler) as client, pytest.raises(PokemonNotFoundError):
+        client.fetch_move("splashier")
 
 
 @pytest.mark.parametrize(
@@ -179,4 +292,20 @@ def test_all_client_errors_share_a_base_class() -> None:
 @pytest.mark.network
 def test_live_fetch_matches_fixture() -> None:
     with PokeApiClient() as client:
-        assert client.fetch_pokemon("charizard") == parse_pokemon(load_fixture("charizard"))
+        live = client.fetch_pokemon("charizard")
+    fixture = parse_pokemon(load_fixture("charizard"))
+
+    assert (live.pokedex_id, live.name, live.types, live.stats) == (
+        fixture.pokedex_id,
+        fixture.name,
+        fixture.types,
+        fixture.stats,
+    )
+    assert fixture.learnset <= live.learnset
+
+
+@pytest.mark.network
+def test_live_fetch_move_matches_fixture() -> None:
+    with PokeApiClient() as client:
+        assert client.fetch_move("thunderbolt") == THUNDERBOLT
+        assert client.fetch_move("swords-dance") == SWORDS_DANCE

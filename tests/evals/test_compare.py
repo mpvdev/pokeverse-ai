@@ -5,7 +5,13 @@ import pytest
 
 from pokeverse.agents import Delegation, SupervisorResult
 from pokeverse.agents.generalist import GENERALIST_SYSTEM_PROMPT
-from pokeverse.catalog import Pokemon, PokemonCatalog, PokemonType, SqlitePokemonRepository
+from pokeverse.catalog import (
+    BaseStats,
+    Pokemon,
+    PokemonCatalog,
+    PokemonType,
+    SqlitePokemonRepository,
+)
 from pokeverse.evals.compare import (
     COMPARE_CASES,
     CompareCase,
@@ -18,12 +24,13 @@ from pokeverse.llm import Completion
 from pokeverse.teams import Team, analyze_team
 
 T = PokemonType
-GARCHOMP = Pokemon(445, "garchomp", (T.DRAGON, T.GROUND))
-EMPOLEON = Pokemon(395, "empoleon", (T.WATER, T.STEEL))
-CORVIKNIGHT = Pokemon(823, "corviknight", (T.FLYING, T.STEEL))
-CLEFABLE = Pokemon(36, "clefable", (T.FAIRY,))
-ARCANINE = Pokemon(59, "arcanine", (T.FIRE,))
-FLYGON = Pokemon(330, "flygon", (T.GROUND, T.DRAGON))
+STATS = BaseStats(80, 80, 80, 80, 80, 80)
+GARCHOMP = Pokemon(445, "garchomp", (T.DRAGON, T.GROUND), STATS)
+EMPOLEON = Pokemon(395, "empoleon", (T.WATER, T.STEEL), STATS)
+CORVIKNIGHT = Pokemon(823, "corviknight", (T.FLYING, T.STEEL), STATS)
+CLEFABLE = Pokemon(36, "clefable", (T.FAIRY,), STATS)
+ARCANINE = Pokemon(59, "arcanine", (T.FIRE,), STATS)
+FLYGON = Pokemon(330, "flygon", (T.GROUND, T.DRAGON), STATS)
 
 TEAM_CASE = CompareCase(
     "t",

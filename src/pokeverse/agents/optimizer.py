@@ -12,7 +12,7 @@ from pokeverse.agents.research import ChatModel
 from pokeverse.agents.tools import (
     make_catalog_tools,
     make_score_tool,
-    normalize_pokemon_identifier,
+    normalize_identifier,
 )
 from pokeverse.catalog import (
     PokemonCatalog,
@@ -203,7 +203,7 @@ class TeamOptimizationAgent:
         notes: str = "",
         facts: str = "",
     ) -> OptimizationResult:
-        keep_names = {normalize_pokemon_identifier(name) for name in keep}
+        keep_names = {normalize_identifier(name) for name in keep}
         original = analyze_team(team)
         completion = self._chat.complete(
             _prompt(original, goal, sorted(map(str, keep_names)), notes, facts),
@@ -234,7 +234,7 @@ class TeamOptimizationAgent:
         member = next((m for m in team.members if m.name == claim["member"]), None)
         if member is None:
             try:
-                member = self._catalog.get(normalize_pokemon_identifier(claim["member"]))
+                member = self._catalog.get(normalize_identifier(claim["member"]))
             except PokemonNotInCatalogError, UpstreamUnavailableError:
                 member = None
         multiplier = (
@@ -260,7 +260,7 @@ class TeamOptimizationAgent:
         if out not in names:
             return reject("not on the team")
         try:
-            newcomer = self._catalog.get(normalize_pokemon_identifier(into))
+            newcomer = self._catalog.get(normalize_identifier(into))
         except (PokemonNotInCatalogError, UpstreamUnavailableError, ValueError) as error:
             return reject(f"could not look up {into!r}: {error}")
         members = list(current.team.members)

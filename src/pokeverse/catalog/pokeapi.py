@@ -11,7 +11,15 @@ from typing import Any, Self
 
 import httpx
 
-from pokeverse.catalog.models import Pokemon, PokemonType, parse_identifier
+from pokeverse.catalog.models import (
+    NAME_PATTERN,
+    BaseStats,
+    DamageClass,
+    Move,
+    Pokemon,
+    PokemonType,
+    parse_identifier,
+)
 
 DEFAULT_BASE_URL = "https://pokeapi.co/api/v2"
 DEFAULT_TIMEOUT_SECONDS = 10.0
@@ -41,7 +49,8 @@ def parse_pokemon(payload: Mapping[str, Any]) -> Pokemon:
     """Map a PokéAPI ``/pokemon/{id}`` payload to a validated ``Pokemon``.
 
     Types are ordered by slot. Non-elemental types that are not part of
-    ``PokemonType`` (e.g. ``stellar``) are skipped.
+    ``PokemonType`` (e.g. ``stellar``) are skipped. All six base stats are required.
+    The learnset keeps every move name that is a valid slug.
     """
     try:
         type_entries = sorted(payload["types"], key=lambda entry: entry["slot"])
@@ -50,9 +59,52 @@ def parse_pokemon(payload: Mapping[str, Any]) -> Pokemon:
             for entry in type_entries
             if entry["type"]["name"] in PokemonType
         )
-        return Pokemon(pokedex_id=payload["id"], name=payload["name"], types=types)
+        base = {entry["stat"]["name"]: entry["base_stat"] for entry in payload["stats"]}
+        stats = BaseStats(
+            hp=base["hp"],
+            attack=base["attack"],
+            defense=base["defense"],
+            special_attack=base["special-attack"],
+            special_defense=base["special-defense"],
+            speed=base["speed"],
+        )
+        learnset = frozenset(
+            name
+            for name in (entry["move"]["name"] for entry in payload["moves"])
+            if NAME_PATTERN.fullmatch(name)
+        )
+        return Pokemon(
+            pokedex_id=payload["id"],
+            name=payload["name"],
+            types=types,
+            stats=stats,
+            learnset=learnset,
+        )
     except (KeyError, TypeError, ValueError) as error:
         raise PokeApiResponseError(f"Malformed Pokémon payload: {error}") from error
+
+
+def parse_move(payload: Mapping[str, Any]) -> Move:
+    """Map a PokéAPI ``/move/{id}`` payload to a validated ``Move``.
+
+    Moves outside our model (e.g. Shadow-type moves, Z-moves) are rejected as unsupported.
+    PokéAPI quirks are normalized: 0 means "none" for power and accuracy (e.g. Dragon Cheer),
+    and status moves never have power.
+    """
+    try:
+        damage_class = DamageClass(payload["damage_class"]["name"])
+        return Move(
+            move_id=payload["id"],
+            name=payload["name"],
+            type=PokemonType(payload["type"]["name"]),
+            damage_class=damage_class,
+            power=None if damage_class is DamageClass.STATUS else payload["power"] or None,
+            accuracy=payload["accuracy"] or None,
+            priority=payload["priority"],
+            pp=payload["pp"],
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise PokeApiResponseError(f"Unsupported or malformed move payload: {error}") from error
 
 
 class PokeApiClient:
@@ -85,6 +137,11 @@ class PokeApiClient:
         """Fetch a single Pokémon by name (e.g. ``"Pikachu"``) or Pokédex id."""
         identifier = parse_identifier(name_or_id)
         return parse_pokemon(self._get_json(f"/pokemon/{identifier}"))
+
+    def fetch_move(self, name_or_id: str | int) -> Move:
+        """Fetch a single move by slug (e.g. ``"thunderbolt"``) or move id."""
+        identifier = parse_identifier(name_or_id)
+        return parse_move(self._get_json(f"/move/{identifier}"))
 
     def _get_json(self, path: str) -> Mapping[str, Any]:
         try:

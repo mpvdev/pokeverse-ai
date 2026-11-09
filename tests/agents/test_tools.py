@@ -3,9 +3,10 @@ from typing import Any
 
 import pytest
 
-from pokeverse.agents import make_catalog_tools, make_team_tools, normalize_pokemon_identifier
+from pokeverse.agents import make_catalog_tools, make_team_tools, normalize_identifier
 from pokeverse.agents.tools import make_score_tool
 from pokeverse.catalog import (
+    BaseStats,
     Pokemon,
     PokemonCatalog,
     PokemonType,
@@ -13,7 +14,9 @@ from pokeverse.catalog import (
 )
 from pokeverse.catalog.pokeapi import PokeApiUnavailableError
 
-MR_MIME = Pokemon(122, "mr-mime", (PokemonType.PSYCHIC, PokemonType.FAIRY))
+MR_MIME = Pokemon(
+    122, "mr-mime", (PokemonType.PSYCHIC, PokemonType.FAIRY), BaseStats(40, 45, 65, 100, 120, 90)
+)
 
 
 class DownSource:
@@ -48,8 +51,8 @@ def get_pokemon(catalog: PokemonCatalog, name_or_id: str) -> dict[str, object]:
         ("#025", 25),
     ],
 )
-def test_normalize_pokemon_identifier(raw: str, expected: str | int) -> None:
-    assert normalize_pokemon_identifier(raw) == expected
+def test_normalize_identifier(raw: str, expected: str | int) -> None:
+    assert normalize_identifier(raw) == expected
 
 
 def test_get_pokemon_returns_canonical_json(repository: SqlitePokemonRepository) -> None:

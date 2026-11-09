@@ -5,17 +5,24 @@ import pytest
 
 from pokeverse.agents import TeamOptimizationAgent
 from pokeverse.agents.optimizer import OPTIMIZATION_SCHEMA, OPTIMIZER_SYSTEM_PROMPT, verdict
-from pokeverse.catalog import Pokemon, PokemonCatalog, PokemonType, SqlitePokemonRepository
+from pokeverse.catalog import (
+    BaseStats,
+    Pokemon,
+    PokemonCatalog,
+    PokemonType,
+    SqlitePokemonRepository,
+)
 from pokeverse.llm import Completion, LlmRequestError
 from pokeverse.teams import Team
 
 T = PokemonType
-RESHIRAM = Pokemon(643, "reshiram", (T.DRAGON, T.FIRE))
-TURTONATOR = Pokemon(776, "turtonator", (T.FIRE, T.DRAGON))
-GOUGING_FIRE = Pokemon(1020, "gouging-fire", (T.FIRE, T.DRAGON))
-VOLCANION = Pokemon(721, "volcanion", (T.FIRE, T.WATER))
-ARCANINE = Pokemon(59, "arcanine", (T.FIRE,))
-CORVIKNIGHT = Pokemon(823, "corviknight", (T.FLYING, T.STEEL))
+STATS = BaseStats(80, 80, 80, 80, 80, 80)
+RESHIRAM = Pokemon(643, "reshiram", (T.DRAGON, T.FIRE), STATS)
+TURTONATOR = Pokemon(776, "turtonator", (T.FIRE, T.DRAGON), STATS)
+GOUGING_FIRE = Pokemon(1020, "gouging-fire", (T.FIRE, T.DRAGON), STATS)
+VOLCANION = Pokemon(721, "volcanion", (T.FIRE, T.WATER), STATS)
+ARCANINE = Pokemon(59, "arcanine", (T.FIRE,), STATS)
+CORVIKNIGHT = Pokemon(823, "corviknight", (T.FLYING, T.STEEL), STATS)
 FIRE_TEAM = Team((RESHIRAM, TURTONATOR, GOUGING_FIRE, VOLCANION))
 
 
