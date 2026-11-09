@@ -1,6 +1,7 @@
 """PokéVerse AI agents and the tools they use."""
 
 from pokeverse.agents.answers import POKEDEX_ANSWER_SCHEMA, Confidence, PokedexAnswer
+from pokeverse.agents.battle_strategy import BattleDecision, BattleStrategyAgent
 from pokeverse.agents.optimizer import OptimizationResult, TeamOptimizationAgent
 from pokeverse.agents.research import RESEARCH_SYSTEM_PROMPT, ResearchAgent, ResearchResult
 from pokeverse.agents.supervisor import Delegation, Supervisor, SupervisorResult
@@ -20,6 +21,8 @@ __all__ = [
     "POKEDEX_ANSWER_SCHEMA",
     "RESEARCH_SYSTEM_PROMPT",
     "TEAM_PROPOSAL_SCHEMA",
+    "BattleDecision",
+    "BattleStrategyAgent",
     "Confidence",
     "Delegation",
     "OptimizationResult",

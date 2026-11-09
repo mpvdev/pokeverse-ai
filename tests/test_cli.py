@@ -515,6 +515,55 @@ def fake_chat(
     return FakeChat
 
 
+AGENT_BATTLE = [
+    "battle",
+    "--side1",
+    "pikachu:thunderbolt,quick-attack",
+    "--side2",
+    "pikachu:thunderbolt",
+    "--player1",
+    "agent",
+]
+
+
+def test_battle_with_the_agent_prints_its_decisions(fake_chat: type[FakeChat]) -> None:
+    fake_chat.data = {"action": "move-1:quick-attack", "reason": "Priority hits first."}
+
+    result = runner.invoke(app, AGENT_BATTLE)
+
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[0].startswith("Side 1 (agent): Pikachu")
+    assert "Pikachu uses Quick Attack." in result.stdout
+    assert "  turn 1, side 1: move-1:quick-attack — Priority hits first." in result.stdout
+    assert "fallbacks: 0." in result.stdout
+    assert all(call["system"] for call in fake_chat.calls)
+
+
+def test_battle_agent_falls_back_to_greedy_on_invalid_replies(
+    fake_chat: type[FakeChat],
+) -> None:
+    fake_chat.data = {"action": "move-7:splash", "reason": "?"}
+
+    result = runner.invoke(app, [*AGENT_BATTLE, "--json"])
+
+    assert result.exit_code == 0
+    report = json.loads(result.stdout)
+    assert report["decisions"]
+    assert all(decision["fallback"] for decision in report["decisions"])
+    assert all(decision["action"] == "move-0:thunderbolt" for decision in report["decisions"])
+    assert report["agent_tokens"] == 15 * len(report["decisions"])
+
+
+def test_battle_agent_auth_errors_exit_with_auth_code(fake_chat: type[FakeChat]) -> None:
+    from pokeverse.llm import LlmAuthError
+
+    fake_chat.error = LlmAuthError("no key")
+
+    result = runner.invoke(app, AGENT_BATTLE)
+
+    assert result.exit_code == EXIT_AUTH
+
+
 def test_ask_prints_answer(fake_chat: type[FakeChat]) -> None:
     result = runner.invoke(app, ["ask", "What type is Pikachu?"])
 
