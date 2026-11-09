@@ -19,7 +19,7 @@ agents (LLM): Research, Team Composition, Team Optimization, Supervisor, Battle 
               Opponent Analysis, Battle Evaluation
                         │  output re-checked by code
                         v
-CLI (pokeverse …) and evaluations
+CLI (pokeverse …), REST API (FastAPI; catalog endpoints so far) and evaluations
 ```
 
 Principles:
@@ -36,7 +36,11 @@ pokeverse-ai/
 ├── src/pokeverse/
 │   ├── __main__.py        # `python -m pokeverse` entry point
 │   ├── model.py           # FrozenModel: shared frozen, strict pydantic base
+│   ├── paths.py           # default_db_path (POKEVERSE_DB / XDG data dir)
 │   ├── cli.py             # Typer app; `pokeverse` console script
+│   ├── api/
+│   │   ├── app.py         # create_app, app, catalog provider, error → HTTP mapping, /health
+│   │   └── catalog.py     # /pokemon, /pokemon/{id}, /pokemon/{id}/learnset, /moves/{id}
 │   ├── agents/
 │   │   ├── answers.py     # PokedexAnswer + its strict JSON Schema
 │   │   ├── battle_review.py    # BattleReviewAgent: lessons citing engine-detected mistakes
@@ -81,6 +85,7 @@ pokeverse-ai/
     ├── test_cli.py
     ├── test_package.py
     ├── agents/            # fake ChatModel / scripted completions
+    ├── api/               # TestClient over a temp DB and a mocked PokéAPI
     ├── battles/
     ├── catalog/
     │   └── fixtures/pokeapi/  # trimmed real PokéAPI responses
@@ -93,6 +98,7 @@ pokeverse-ai/
 
 | Component | Module | Responsibility |
 |-----------|--------|----------------|
+| REST API | `pokeverse.api` | FastAPI app (`create_app(catalogs=None)`; module-level `app` for uvicorn). The catalog is injected as a provider stored on `app.state` (`offline` flag → context manager yielding a `PokemonCatalog`), opened per request in the handler's thread because SQLite connections are per thread; tests swap in their own. `GET /health`; `GET /pokemon` (local catalog only), `/pokemon/{name_or_id}`, `/pokemon/{name_or_id}/learnset`, `/moves/{name_or_id}`, each with `?offline=true`. Identifiers are normalized like agent input; invalid ones → 422 before any lookup. Not in catalog → 404, upstream unavailable → 503 (`{"detail": …}`). Responses are the pydantic models, so the OpenAPI schema (`/docs`, `/openapi.json`) comes from them. Will replace the CLI. |
 | CLI | `pokeverse.cli` | Typer app. `pokemon <name|id> [--json] [--offline]`, `move <name|id> [--json] [--offline]`, `learnset <pokemon> [--json] [--offline]`, `moveset <pokemon> [<move>...] [--json] [--offline]` (validates a battler, or shows the default moveset), `damage <attacker> <move> <defender> [--json] [--offline]` (damage range at level 50), `battle --side1 … --side2 … [--player1/2 greedy|random|agent] [--seed] [--runs] [--json] [--offline]` (battles; members `name` or `name:move,move`; `agent` adds the Battle Strategy Agent's decisions and token use, briefed by a pre-battle analysis unless `--no-analysis`), `scout --side1 … --side2 … [--json] [--usage]` (Opponent Analysis Agent report and briefing), `battle-eval [--scenario] [--system] [--seeds] [--seed-start] [--json]` (win rate with 95% CI, mistakes, tokens against greedy; progress on stderr), `battle-feedback [--scenario] [--train] [--test] [--json]` (lessons from training seeds, measured on new seeds) and `list [--json]` over the local catalog (names normalized like agent input: `"Mr. Mime"`, `"Swords Dance"`, `#006`); `ask <question> [--no-tools] [--json]` asks the LLM, which can look Pokémon up via the catalog tool (`--usage` traces tool calls; `--json` prints a validated `PokedexAnswer`). `research <question> [--json] [--usage]` runs the Research Agent and warns on ungrounded claims; `eval [--case ID]` runs the evaluation suite; `team <names…> [--json] [--offline]` analyzes a team; `build "<request>" [--json] [--usage]` runs the Team Composition Agent and prints our own analysis of its team; `advise "<request>" [--optimize auto|always|never] [--json] [--usage]` runs the Supervisor and can show delegations and the supervisor/specialist token split; `optimize <names…> [--goal] [--keep] [--notes] [--json] [--usage]` runs the Team Optimization Agent; `compare [--case] [--system] [--json]` runs the single- vs multi-agent comparison. DB path from `--db`, `POKEVERSE_DB`, or `$XDG_DATA_HOME/pokeverse/catalog.db`. Exit codes: 0 ok, 1 not found, 2 invalid input, 3 upstream unavailable, 4 auth/credentials, 5 eval failures; errors on stderr. |
 | Catalog models | `pokeverse.catalog.models` | Immutable, self-validating reference data as frozen, strict pydantic models (`FrozenModel`: no type coercion, no unknown fields): `Pokemon` (slug name, 1–2 types, required `BaseStats`, `learnset` of move slugs), `BaseStats` (six base stats, each 1–255, `total`) and the `PokemonType` enum. `Pokemon.to_dict()` includes `base_stats`; `to_dict(stats=False)` omits them (used for team members, where analysis is type-based); the learnset is never serialized. `Move`: slug name, type, `DamageClass` (physical/special/status), `power` (`None` for status and fixed-damage moves; status moves never have power), `accuracy` (`None` = never misses), `priority` (−7…+5), `pp` (1–40). |
 | PokéAPI client | `pokeverse.catalog.pokeapi` | Fetches a Pokémon (`/pokemon`: types, all six base stats and the learnset's move names) or a move (`/move`) by name/id, maps payloads to validated models (moves outside the model, such as Shadow moves and Z-moves, are rejected), and translates HTTP/network failures into typed `PokeApiError` subclasses. Import-only; not a runtime dependency. |
@@ -140,6 +146,7 @@ user request ──> Supervisor (LLM) ── ask_research_agent(task) ──> Re
 ## Runtime
 
 - Python 3.15, packaged with setuptools (`src/` layout).
-- Dependencies managed with uv (`uv.lock`). Runtime: Typer, httpx, pydantic, OpenAI SDK, python-dotenv.
+- Dependencies managed with uv (`uv.lock`). Runtime: Typer, FastAPI, uvicorn, httpx, pydantic, OpenAI SDK, python-dotenv.
+- REST API: `uv run uvicorn pokeverse.api:app --reload` (http://127.0.0.1:8000, interactive docs at `/docs`).
 - Persistence: local SQLite file, by default `~/.local/share/pokeverse/catalog.db` (outside the repo).
 - LLM inference temporarily uses the OpenAI Responses API (default model `gpt-6-luna`, override with `POKEVERSE_MODEL_ID`; `POKEVERSE_REASONING_EFFORT` defaults to `none`, and temperature is only sent when it is `none`); credentials come from `OPENAI_API_KEY`, either exported or read from a git-ignored `.env` in the working directory (exported values win). Network access: PokéAPI client and OpenAI.

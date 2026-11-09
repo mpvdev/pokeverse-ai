@@ -1,7 +1,6 @@
 """Command-line interface for PokéVerse AI."""
 
 import json
-import os
 import random
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
@@ -72,6 +71,7 @@ from pokeverse.llm import (
     LlmUnavailableError,
     OpenAIChat,
 )
+from pokeverse.paths import default_db_path
 from pokeverse.teams import MAX_TEAM_SIZE, Team, TeamAnalysis, analyze_team
 
 EXIT_NOT_FOUND = 1
@@ -86,11 +86,6 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 app = typer.Typer(add_completion=False, no_args_is_help=False)
-
-
-def default_db_path() -> Path:
-    data_home = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
-    return Path(data_home) / "pokeverse" / "catalog.db"
 
 
 @dataclass(frozen=True, slots=True)

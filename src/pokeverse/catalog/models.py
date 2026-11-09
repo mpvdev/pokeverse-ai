@@ -77,7 +77,7 @@ class Pokemon(FrozenModel):
     pokedex_id: int = Field(gt=0)
     name: Slug
     types: tuple[PokemonType, ...] = Field(min_length=1, max_length=MAX_TYPES)
-    stats: BaseStats
+    stats: BaseStats = Field(serialization_alias="base_stats")
     learnset: frozenset[Slug] = Field(default=frozenset(), exclude=True)
 
     @field_validator("types")
@@ -98,14 +98,7 @@ class Pokemon(FrozenModel):
         ``stats=False`` omits base stats where only identity and types matter (saves tokens).
         The learnset (often 100+ names) is never included.
         """
-        data: dict[str, Any] = {
-            "pokedex_id": self.pokedex_id,
-            "name": self.name,
-            "types": [pokemon_type.value for pokemon_type in self.types],
-        }
-        if stats:
-            data["base_stats"] = self.stats.to_dict()
-        return data
+        return self.model_dump(mode="json", by_alias=True, exclude=None if stats else {"stats"})
 
 
 class DamageClass(StrEnum):
@@ -143,16 +136,7 @@ class Move(FrozenModel):
         return self.name.replace("-", " ").title()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "move_id": self.move_id,
-            "name": self.name,
-            "type": self.type.value,
-            "damage_class": self.damage_class.value,
-            "power": self.power,
-            "accuracy": self.accuracy,
-            "priority": self.priority,
-            "pp": self.pp,
-        }
+        return self.model_dump(mode="json")
 
 
 def parse_identifier(name_or_id: str | int) -> str | int:

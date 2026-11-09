@@ -18,6 +18,7 @@ Goal: replace the CLI with a FastAPI service; all domain models become pydantic 
 ### Phase 3.5 progress
 
 - [x] Step 1: catalog models to pydantic — shared `pokeverse.model.FrozenModel` (`frozen=True`, `strict=True`, `extra="forbid"`: no coercion such as `"25"` → 25 or `True` → 1, no unknown fields). `BaseStats`, `Pokemon` and `Move` are pydantic models with the same rules expressed as types and constraints (`Slug` pattern, `Field(gt/ge/le)`, 1–2 types) plus validators for the rest (no duplicate types; status moves have no power); the learnset is excluded from serialization. Dependency added: `pydantic>=2.14` (2.14.3; pydantic-core ships Python 3.15 wheels). pydantic models take keyword arguments only, so a one-off AST codemod (approved) converted 1,177 positional constructor arguments in 24 test files, followed by `ruff format`. Validation tests now assert which field pydantic rejected (`ValidationError.errors()`) instead of matching hand-written messages; the two custom rules keep their messages. `dataclasses.replace` on these models became `model_copy(update=...)` (which does not re-validate). Behaviour, CLI output and JSON are unchanged.
+- [x] Step 2: FastAPI foundation and catalog endpoints — `pokeverse.api`: `create_app(catalogs=None)` app factory plus a module-level `app` for uvicorn; the catalog is injected as a provider (`offline` flag → context manager yielding a `PokemonCatalog`) stored on `app.state`, so tests swap in a temp database and a mocked PokeAPI. The SQLite catalog is opened per request in the handler's thread, because SQLite connections belong to the thread that opened them. Endpoints: `GET /health`, `/pokemon` (local only), `/pokemon/{name_or_id}`, `/pokemon/{name_or_id}/learnset`, `/moves/{name_or_id}`; lookups take `?offline=true`. Path identifiers are normalized like CLI and agent input (`Mr. Mime` → `mr-mime`, `#025` → 25); invalid ones are 422 before any lookup. Errors: not in catalog → 404, upstream unavailable → 503, both as `{"detail": ...}`. Responses are the pydantic models themselves, so OpenAPI schemas come from them; `Pokemon.stats` serializes as `base_stats` (alias) and `to_dict()` now delegates to `model_dump`, keeping one canonical JSON shape (D15). `default_db_path` moved to `pokeverse.paths` so the API and CLI share it. Dependencies added: `fastapi>=0.162`, `uvicorn>=0.54` (plain, not `[standard]`, whose compiled extras may lack Python 3.15 wheels). 19 API tests via `TestClient`.
 
 ## Completed
 
@@ -141,7 +142,7 @@ Deliverable: an AI-assisted battle strategy system. Battle mechanics are determi
 
 ## Next Up
 
-- Phase 3.5 Step 2: FastAPI foundation and catalog endpoints.
+- Phase 3.5 Step 3: deterministic endpoints — teams, battlers and battle engine state to pydantic (engine slowdown measured); `POST /teams/analysis`, `/battlers`, `/damage`, `/battles`.
 - Phase 4 — Persistent Pokémon World (paused until the REST API is done): trainer profiles, persistent application state, NPC interactions, quests and exploration, memory.
 - Carried over from Phase 3: larger agent samples (or cheaper models) before ranking battle players; a richer mistake signal, e.g. comparison with lookahead play, so the feedback loop has something to learn; PP, status conditions, abilities and hidden opponent teams.
 - Carried over from Phase 2: repeated runs per cell in `compare` before ranking systems; `goal` constraints such as "Fire-only" are enforced only by the model; in `auto` mode, wrong type claims on teams without vulnerabilities are not fact-checked; the Strands spike (re-implement the Supervisor and compare with `pokeverse compare`).
@@ -155,6 +156,7 @@ uv run pytest -m network         # opt-in live PokéAPI tests
 uv run pytest -m openai          # opt-in live OpenAI tests (needs OPENAI_API_KEY, costs money)
 uv run ruff check . && uv run ruff format --check .
 uv run pokeverse --version
+uv run uvicorn pokeverse.api:app --reload   # REST API on http://127.0.0.1:8000, docs at /docs
 uv run pokeverse pokemon pikachu    # uses ~/.local/share/pokeverse/catalog.db
 uv run pokeverse list
 uv run pokeverse move "Swords Dance"
