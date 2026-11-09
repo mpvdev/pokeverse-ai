@@ -16,19 +16,109 @@ from pokeverse.catalog import BaseStats, DamageClass, Move, Pokemon, PokemonType
 T = PokemonType
 D = DamageClass
 
-GARCHOMP = Pokemon(445, "garchomp", (T.DRAGON, T.GROUND), BaseStats(108, 130, 95, 80, 85, 102))
-PIKACHU = Pokemon(25, "pikachu", (T.ELECTRIC,), BaseStats(35, 55, 40, 50, 50, 90))
-CHARIZARD = Pokemon(6, "charizard", (T.FIRE, T.FLYING), BaseStats(78, 84, 78, 109, 85, 100))
-GRASS_DRAGON = Pokemon(1, "grass-dragon", (T.GRASS, T.DRAGON), BaseStats(80, 80, 80, 80, 80, 80))
-FEEBLE = Pokemon(2, "feeble", (T.NORMAL,), BaseStats(50, 1, 1, 1, 1, 1))
-WALL = Pokemon(3, "wall", (T.STEEL, T.FIRE), BaseStats(50, 50, 255, 50, 255, 50))
+GARCHOMP = Pokemon(
+    pokedex_id=445,
+    name="garchomp",
+    types=(T.DRAGON, T.GROUND),
+    stats=BaseStats(
+        hp=108, attack=130, defense=95, special_attack=80, special_defense=85, speed=102
+    ),
+)
+PIKACHU = Pokemon(
+    pokedex_id=25,
+    name="pikachu",
+    types=(T.ELECTRIC,),
+    stats=BaseStats(hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=90),
+)
+CHARIZARD = Pokemon(
+    pokedex_id=6,
+    name="charizard",
+    types=(T.FIRE, T.FLYING),
+    stats=BaseStats(
+        hp=78, attack=84, defense=78, special_attack=109, special_defense=85, speed=100
+    ),
+)
+GRASS_DRAGON = Pokemon(
+    pokedex_id=1,
+    name="grass-dragon",
+    types=(T.GRASS, T.DRAGON),
+    stats=BaseStats(hp=80, attack=80, defense=80, special_attack=80, special_defense=80, speed=80),
+)
+FEEBLE = Pokemon(
+    pokedex_id=2,
+    name="feeble",
+    types=(T.NORMAL,),
+    stats=BaseStats(hp=50, attack=1, defense=1, special_attack=1, special_defense=1, speed=1),
+)
+WALL = Pokemon(
+    pokedex_id=3,
+    name="wall",
+    types=(T.STEEL, T.FIRE),
+    stats=BaseStats(
+        hp=50, attack=50, defense=255, special_attack=50, special_defense=255, speed=50
+    ),
+)
 
-EARTHQUAKE = Move(89, "earthquake", T.GROUND, D.PHYSICAL, 100, 100, 0, 10)
-IRON_TAIL = Move(231, "iron-tail", T.STEEL, D.PHYSICAL, 100, 75, 0, 15)
-THUNDERBOLT = Move(85, "thunderbolt", T.ELECTRIC, D.SPECIAL, 90, 100, 0, 15)
-BUG_BITE = Move(450, "bug-bite", T.BUG, D.PHYSICAL, 60, 100, 0, 20)
-SWORDS_DANCE = Move(14, "swords-dance", T.NORMAL, D.STATUS, None, None, 0, 20)
-SEISMIC_TOSS = Move(69, "seismic-toss", T.FIGHTING, D.PHYSICAL, None, 100, 0, 20)
+EARTHQUAKE = Move(
+    move_id=89,
+    name="earthquake",
+    type=T.GROUND,
+    damage_class=D.PHYSICAL,
+    power=100,
+    accuracy=100,
+    priority=0,
+    pp=10,
+)
+IRON_TAIL = Move(
+    move_id=231,
+    name="iron-tail",
+    type=T.STEEL,
+    damage_class=D.PHYSICAL,
+    power=100,
+    accuracy=75,
+    priority=0,
+    pp=15,
+)
+THUNDERBOLT = Move(
+    move_id=85,
+    name="thunderbolt",
+    type=T.ELECTRIC,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+BUG_BITE = Move(
+    move_id=450,
+    name="bug-bite",
+    type=T.BUG,
+    damage_class=D.PHYSICAL,
+    power=60,
+    accuracy=100,
+    priority=0,
+    pp=20,
+)
+SWORDS_DANCE = Move(
+    move_id=14,
+    name="swords-dance",
+    type=T.NORMAL,
+    damage_class=D.STATUS,
+    power=None,
+    accuracy=None,
+    priority=0,
+    pp=20,
+)
+SEISMIC_TOSS = Move(
+    move_id=69,
+    name="seismic-toss",
+    type=T.FIGHTING,
+    damage_class=D.PHYSICAL,
+    power=None,
+    accuracy=100,
+    priority=0,
+    pp=20,
+)
 
 
 def test_super_effective_stab_range_rounds_half_down() -> None:

@@ -4,9 +4,9 @@ from pokeverse.catalog import BaseStats, Pokemon, PokemonType
 from pokeverse.teams import Team
 
 T = PokemonType
-STATS = BaseStats(80, 80, 80, 80, 80, 80)
-PIKACHU = Pokemon(25, "pikachu", (T.ELECTRIC,), STATS)
-CHARIZARD = Pokemon(6, "charizard", (T.FIRE, T.FLYING), STATS)
+STATS = BaseStats(hp=80, attack=80, defense=80, special_attack=80, special_defense=80, speed=80)
+PIKACHU = Pokemon(pokedex_id=25, name="pikachu", types=(T.ELECTRIC,), stats=STATS)
+CHARIZARD = Pokemon(pokedex_id=6, name="charizard", types=(T.FIRE, T.FLYING), stats=STATS)
 
 
 def test_team_keeps_member_order() -> None:
@@ -19,7 +19,9 @@ def test_team_keeps_member_order() -> None:
 
 
 def test_full_team_of_six_is_allowed() -> None:
-    members = tuple(Pokemon(i, f"mon-{i}", (T.NORMAL,), STATS) for i in range(1, 7))
+    members = tuple(
+        Pokemon(pokedex_id=i, name=f"mon-{i}", types=(T.NORMAL,), stats=STATS) for i in range(1, 7)
+    )
 
     assert len(Team(members).members) == 6
 
@@ -34,7 +36,13 @@ def test_same_species_may_appear_more_than_once() -> None:
     ("members", "message"),
     [
         ((), "between 1 and 6"),
-        (tuple(Pokemon(i, f"mon-{i}", (T.NORMAL,), STATS) for i in range(1, 8)), "between 1 and 6"),
+        (
+            tuple(
+                Pokemon(pokedex_id=i, name=f"mon-{i}", types=(T.NORMAL,), stats=STATS)
+                for i in range(1, 8)
+            ),
+            "between 1 and 6",
+        ),
         ([PIKACHU], "tuple"),
         (("pikachu",), "must be Pokemon"),
     ],

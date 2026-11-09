@@ -1,5 +1,4 @@
 from collections.abc import Iterator
-from dataclasses import replace
 
 import pytest
 
@@ -19,14 +18,86 @@ from pokeverse.catalog.pokeapi import PokemonNotFoundError
 T = PokemonType
 D = DamageClass
 
-OUTRAGE = Move(200, "outrage", T.DRAGON, D.PHYSICAL, 120, 100, 0, 10)
-EARTHQUAKE = Move(89, "earthquake", T.GROUND, D.PHYSICAL, 100, 100, 0, 10)
-DRAGON_CLAW = Move(337, "dragon-claw", T.DRAGON, D.PHYSICAL, 80, 100, 0, 15)
-STONE_EDGE = Move(444, "stone-edge", T.ROCK, D.PHYSICAL, 100, 80, 0, 5)
-FIRE_FANG = Move(424, "fire-fang", T.FIRE, D.PHYSICAL, 65, 95, 0, 15)
-SWORDS_DANCE = Move(14, "swords-dance", T.NORMAL, D.STATUS, None, None, 0, 20)
-HYPER_BEAM = Move(63, "hyper-beam", T.NORMAL, D.SPECIAL, 150, 90, 0, 5)
-THUNDERBOLT = Move(85, "thunderbolt", T.ELECTRIC, D.SPECIAL, 90, 100, 0, 15)
+OUTRAGE = Move(
+    move_id=200,
+    name="outrage",
+    type=T.DRAGON,
+    damage_class=D.PHYSICAL,
+    power=120,
+    accuracy=100,
+    priority=0,
+    pp=10,
+)
+EARTHQUAKE = Move(
+    move_id=89,
+    name="earthquake",
+    type=T.GROUND,
+    damage_class=D.PHYSICAL,
+    power=100,
+    accuracy=100,
+    priority=0,
+    pp=10,
+)
+DRAGON_CLAW = Move(
+    move_id=337,
+    name="dragon-claw",
+    type=T.DRAGON,
+    damage_class=D.PHYSICAL,
+    power=80,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+STONE_EDGE = Move(
+    move_id=444,
+    name="stone-edge",
+    type=T.ROCK,
+    damage_class=D.PHYSICAL,
+    power=100,
+    accuracy=80,
+    priority=0,
+    pp=5,
+)
+FIRE_FANG = Move(
+    move_id=424,
+    name="fire-fang",
+    type=T.FIRE,
+    damage_class=D.PHYSICAL,
+    power=65,
+    accuracy=95,
+    priority=0,
+    pp=15,
+)
+SWORDS_DANCE = Move(
+    move_id=14,
+    name="swords-dance",
+    type=T.NORMAL,
+    damage_class=D.STATUS,
+    power=None,
+    accuracy=None,
+    priority=0,
+    pp=20,
+)
+HYPER_BEAM = Move(
+    move_id=63,
+    name="hyper-beam",
+    type=T.NORMAL,
+    damage_class=D.SPECIAL,
+    power=150,
+    accuracy=90,
+    priority=0,
+    pp=5,
+)
+THUNDERBOLT = Move(
+    move_id=85,
+    name="thunderbolt",
+    type=T.ELECTRIC,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
 
 ALL_MOVES = (
     OUTRAGE,
@@ -40,11 +111,13 @@ ALL_MOVES = (
 )
 
 GARCHOMP = Pokemon(
-    445,
-    "garchomp",
-    (T.DRAGON, T.GROUND),
-    BaseStats(108, 130, 95, 80, 85, 102),
-    frozenset(move.name for move in ALL_MOVES if move is not THUNDERBOLT),
+    pokedex_id=445,
+    name="garchomp",
+    types=(T.DRAGON, T.GROUND),
+    stats=BaseStats(
+        hp=108, attack=130, defense=95, special_attack=80, special_defense=85, speed=102
+    ),
+    learnset=frozenset(move.name for move in ALL_MOVES if move is not THUNDERBOLT),
 )
 
 
@@ -72,13 +145,24 @@ def test_default_moveset_can_be_shorter_than_four() -> None:
 
 
 def test_first_pick_is_the_strongest_move_even_without_coverage() -> None:
-    body_slam = Move(34, "body-slam", T.NORMAL, D.PHYSICAL, 85, 100, 0, 15)
+    body_slam = Move(
+        move_id=34,
+        name="body-slam",
+        type=T.NORMAL,
+        damage_class=D.PHYSICAL,
+        power=85,
+        accuracy=100,
+        priority=0,
+        pp=15,
+    )
     snorlax = Pokemon(
-        143,
-        "snorlax",
-        (T.NORMAL,),
-        BaseStats(160, 110, 65, 65, 110, 30),
-        frozenset({"body-slam", "earthquake"}),
+        pokedex_id=143,
+        name="snorlax",
+        types=(T.NORMAL,),
+        stats=BaseStats(
+            hp=160, attack=110, defense=65, special_attack=65, special_defense=110, speed=30
+        ),
+        learnset=frozenset({"body-slam", "earthquake"}),
     )
 
     assert choose_moveset(snorlax, (EARTHQUAKE, body_slam))[0] == body_slam
@@ -135,7 +219,7 @@ def test_default_battler_fails_when_a_learnable_move_is_unavailable(
 def test_default_battler_needs_at_least_one_battle_move(
     repository: SqlitePokemonRepository,
 ) -> None:
-    species = replace(GARCHOMP, learnset=frozenset({"swords-dance"}))
+    species = GARCHOMP.model_copy(update={"learnset": frozenset({"swords-dance"})})
     catalog = PokemonCatalog(repository, FakeSource(species, (SWORDS_DANCE,)))
 
     with pytest.raises(ValueError, match="no moves usable in battle"):

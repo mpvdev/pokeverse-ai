@@ -2,7 +2,22 @@
 
 ## Current Phase
 
-**Phase 4 — Persistent Pokémon World** (not started). Phase 3 is complete on branch `phase-3`.
+**Phase 3.5 — REST API** (in progress). Phase 4 — Persistent Pokémon World is paused. Phase 3 is complete on branch `phase-3`.
+
+## Phase 3.5 Plan — REST API (interim phase)
+
+Goal: replace the CLI with a FastAPI service; all domain models become pydantic models. One step at a time:
+
+1. **Catalog models to pydantic** — `BaseStats`, `Pokemon`, `Move` as frozen, strict pydantic models.
+2. **FastAPI foundation + catalog endpoints** — app factory, settings, catalog dependency, error → HTTP mapping, `GET /pokemon/{id}`, `/moves/{id}`, `/pokemon/{id}/learnset`, `/pokemon`, health, OpenAPI.
+3. **Deterministic endpoints** — teams, battlers, battle engine state and results to pydantic (engine slowdown measured); `POST /teams/analysis`, `/battlers`, `/damage`, `/battles` (code players).
+4. **Single-call agent endpoints** — agent outputs to pydantic (schemas generated from models); `/research`, `/teams/build`, `/teams/optimize`, `/advise`, `/scout`.
+5. **Background jobs** — job store and runner for agent battles and evaluation suites; `POST /jobs/…`, `GET /jobs/{id}`.
+6. **Remove the CLI** — port remaining CLI tests to API tests; README and docs.
+
+### Phase 3.5 progress
+
+- [x] Step 1: catalog models to pydantic — shared `pokeverse.model.FrozenModel` (`frozen=True`, `strict=True`, `extra="forbid"`: no coercion such as `"25"` → 25 or `True` → 1, no unknown fields). `BaseStats`, `Pokemon` and `Move` are pydantic models with the same rules expressed as types and constraints (`Slug` pattern, `Field(gt/ge/le)`, 1–2 types) plus validators for the rest (no duplicate types; status moves have no power); the learnset is excluded from serialization. Dependency added: `pydantic>=2.14` (2.14.3; pydantic-core ships Python 3.15 wheels). pydantic models take keyword arguments only, so a one-off AST codemod (approved) converted 1,177 positional constructor arguments in 24 test files, followed by `ruff format`. Validation tests now assert which field pydantic rejected (`ValidationError.errors()`) instead of matching hand-written messages; the two custom rules keep their messages. `dataclasses.replace` on these models became `model_copy(update=...)` (which does not re-validate). Behaviour, CLI output and JSON are unchanged.
 
 ## Completed
 
@@ -126,7 +141,8 @@ Deliverable: an AI-assisted battle strategy system. Battle mechanics are determi
 
 ## Next Up
 
-- Phase 4 — Persistent Pokémon World: trainer profiles, persistent application state, NPC interactions, quests and exploration, memory.
+- Phase 3.5 Step 2: FastAPI foundation and catalog endpoints.
+- Phase 4 — Persistent Pokémon World (paused until the REST API is done): trainer profiles, persistent application state, NPC interactions, quests and exploration, memory.
 - Carried over from Phase 3: larger agent samples (or cheaper models) before ranking battle players; a richer mistake signal, e.g. comparison with lookahead play, so the feedback loop has something to learn; PP, status conditions, abilities and hidden opponent teams.
 - Carried over from Phase 2: repeated runs per cell in `compare` before ranking systems; `goal` constraints such as "Fire-only" are enforced only by the model; in `auto` mode, wrong type claims on teams without vulnerabilities are not fact-checked; the Strands spike (re-implement the Supervisor and compare with `pokeverse compare`).
 

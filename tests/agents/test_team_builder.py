@@ -20,10 +20,10 @@ from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.llm import Completion, LlmRequestError, LlmSettings, OpenAIChat, ToolCall
 
 T = PokemonType
-STATS = BaseStats(80, 80, 80, 80, 80, 80)
-PIKACHU = Pokemon(25, "pikachu", (T.ELECTRIC,), STATS)
-CHARIZARD = Pokemon(6, "charizard", (T.FIRE, T.FLYING), STATS)
-BLASTOISE = Pokemon(9, "blastoise", (T.WATER,), STATS)
+STATS = BaseStats(hp=80, attack=80, defense=80, special_attack=80, special_defense=80, speed=80)
+PIKACHU = Pokemon(pokedex_id=25, name="pikachu", types=(T.ELECTRIC,), stats=STATS)
+CHARIZARD = Pokemon(pokedex_id=6, name="charizard", types=(T.FIRE, T.FLYING), stats=STATS)
+BLASTOISE = Pokemon(pokedex_id=9, name="blastoise", types=(T.WATER,), stats=STATS)
 
 
 class ScriptedChat:

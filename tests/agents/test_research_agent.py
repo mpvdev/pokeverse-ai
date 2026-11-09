@@ -18,7 +18,12 @@ from pokeverse.catalog import (
 )
 from pokeverse.llm import Completion, LlmRequestError, ToolCall
 
-PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), BaseStats(35, 55, 40, 50, 50, 90))
+PIKACHU = Pokemon(
+    pokedex_id=25,
+    name="pikachu",
+    types=(PokemonType.ELECTRIC,),
+    stats=BaseStats(hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=90),
+)
 
 
 class ScriptedChat:

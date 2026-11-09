@@ -24,13 +24,13 @@ from pokeverse.llm import Completion
 from pokeverse.teams import Team, analyze_team
 
 T = PokemonType
-STATS = BaseStats(80, 80, 80, 80, 80, 80)
-GARCHOMP = Pokemon(445, "garchomp", (T.DRAGON, T.GROUND), STATS)
-EMPOLEON = Pokemon(395, "empoleon", (T.WATER, T.STEEL), STATS)
-CORVIKNIGHT = Pokemon(823, "corviknight", (T.FLYING, T.STEEL), STATS)
-CLEFABLE = Pokemon(36, "clefable", (T.FAIRY,), STATS)
-ARCANINE = Pokemon(59, "arcanine", (T.FIRE,), STATS)
-FLYGON = Pokemon(330, "flygon", (T.GROUND, T.DRAGON), STATS)
+STATS = BaseStats(hp=80, attack=80, defense=80, special_attack=80, special_defense=80, speed=80)
+GARCHOMP = Pokemon(pokedex_id=445, name="garchomp", types=(T.DRAGON, T.GROUND), stats=STATS)
+EMPOLEON = Pokemon(pokedex_id=395, name="empoleon", types=(T.WATER, T.STEEL), stats=STATS)
+CORVIKNIGHT = Pokemon(pokedex_id=823, name="corviknight", types=(T.FLYING, T.STEEL), stats=STATS)
+CLEFABLE = Pokemon(pokedex_id=36, name="clefable", types=(T.FAIRY,), stats=STATS)
+ARCANINE = Pokemon(pokedex_id=59, name="arcanine", types=(T.FIRE,), stats=STATS)
+FLYGON = Pokemon(pokedex_id=330, name="flygon", types=(T.GROUND, T.DRAGON), stats=STATS)
 
 TEAM_CASE = CompareCase(
     "t",

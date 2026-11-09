@@ -22,11 +22,30 @@ from pokeverse.catalog.pokeapi import (
     PokemonNotFoundError,
 )
 
-PIKACHU = Pokemon(25, "pikachu", (PokemonType.ELECTRIC,), BaseStats(35, 55, 40, 50, 50, 90))
-CHARIZARD = Pokemon(
-    6, "charizard", (PokemonType.FIRE, PokemonType.FLYING), BaseStats(78, 84, 78, 109, 85, 100)
+PIKACHU = Pokemon(
+    pokedex_id=25,
+    name="pikachu",
+    types=(PokemonType.ELECTRIC,),
+    stats=BaseStats(hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=90),
 )
-THUNDERBOLT = Move(85, "thunderbolt", PokemonType.ELECTRIC, DamageClass.SPECIAL, 90, 100, 0, 15)
+CHARIZARD = Pokemon(
+    pokedex_id=6,
+    name="charizard",
+    types=(PokemonType.FIRE, PokemonType.FLYING),
+    stats=BaseStats(
+        hp=78, attack=84, defense=78, special_attack=109, special_defense=85, speed=100
+    ),
+)
+THUNDERBOLT = Move(
+    move_id=85,
+    name="thunderbolt",
+    type=PokemonType.ELECTRIC,
+    damage_class=DamageClass.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
 
 
 class FakeSource:

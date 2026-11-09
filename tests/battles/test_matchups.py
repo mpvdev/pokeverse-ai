@@ -4,21 +4,84 @@ from pokeverse.catalog import BaseStats, DamageClass, Move, Pokemon, PokemonType
 T = PokemonType
 D = DamageClass
 
-EARTHQUAKE = Move(89, "earthquake", T.GROUND, D.PHYSICAL, 100, 100, 0, 10)
-DRAGON_CLAW = Move(337, "dragon-claw", T.DRAGON, D.PHYSICAL, 80, 100, 0, 15)
-THUNDERBOLT = Move(85, "thunderbolt", T.ELECTRIC, D.SPECIAL, 90, 100, 0, 15)
-QUICK_ATTACK = Move(98, "quick-attack", T.NORMAL, D.PHYSICAL, 40, 100, 1, 30)
-FLAMETHROWER = Move(53, "flamethrower", T.FIRE, D.SPECIAL, 90, 100, 0, 15)
+EARTHQUAKE = Move(
+    move_id=89,
+    name="earthquake",
+    type=T.GROUND,
+    damage_class=D.PHYSICAL,
+    power=100,
+    accuracy=100,
+    priority=0,
+    pp=10,
+)
+DRAGON_CLAW = Move(
+    move_id=337,
+    name="dragon-claw",
+    type=T.DRAGON,
+    damage_class=D.PHYSICAL,
+    power=80,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+THUNDERBOLT = Move(
+    move_id=85,
+    name="thunderbolt",
+    type=T.ELECTRIC,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+QUICK_ATTACK = Move(
+    move_id=98,
+    name="quick-attack",
+    type=T.NORMAL,
+    damage_class=D.PHYSICAL,
+    power=40,
+    accuracy=100,
+    priority=1,
+    pp=30,
+)
+FLAMETHROWER = Move(
+    move_id=53,
+    name="flamethrower",
+    type=T.FIRE,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
 
 LEARNSET = frozenset(
     move.name for move in (EARTHQUAKE, DRAGON_CLAW, THUNDERBOLT, QUICK_ATTACK, FLAMETHROWER)
 )
 GARCHOMP_SPECIES = Pokemon(
-    445, "garchomp", (T.DRAGON, T.GROUND), BaseStats(108, 130, 95, 80, 85, 102), LEARNSET
+    pokedex_id=445,
+    name="garchomp",
+    types=(T.DRAGON, T.GROUND),
+    stats=BaseStats(
+        hp=108, attack=130, defense=95, special_attack=80, special_defense=85, speed=102
+    ),
+    learnset=LEARNSET,
 )
-PIKACHU_SPECIES = Pokemon(25, "pikachu", (T.ELECTRIC,), BaseStats(35, 55, 40, 50, 50, 90), LEARNSET)
+PIKACHU_SPECIES = Pokemon(
+    pokedex_id=25,
+    name="pikachu",
+    types=(T.ELECTRIC,),
+    stats=BaseStats(hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=90),
+    learnset=LEARNSET,
+)
 CHARIZARD_SPECIES = Pokemon(
-    6, "charizard", (T.FIRE, T.FLYING), BaseStats(78, 84, 78, 109, 85, 100), LEARNSET
+    pokedex_id=6,
+    name="charizard",
+    types=(T.FIRE, T.FLYING),
+    stats=BaseStats(
+        hp=78, attack=84, defense=78, special_attack=109, special_defense=85, speed=100
+    ),
+    learnset=LEARNSET,
 )
 
 GARCHOMP = Battler(GARCHOMP_SPECIES, (EARTHQUAKE, DRAGON_CLAW))

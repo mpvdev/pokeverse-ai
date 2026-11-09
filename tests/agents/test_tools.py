@@ -15,7 +15,12 @@ from pokeverse.catalog import (
 from pokeverse.catalog.pokeapi import PokeApiUnavailableError
 
 MR_MIME = Pokemon(
-    122, "mr-mime", (PokemonType.PSYCHIC, PokemonType.FAIRY), BaseStats(40, 45, 65, 100, 120, 90)
+    pokedex_id=122,
+    name="mr-mime",
+    types=(PokemonType.PSYCHIC, PokemonType.FAIRY),
+    stats=BaseStats(
+        hp=40, attack=45, defense=65, special_attack=100, special_defense=120, speed=90
+    ),
 )
 
 

@@ -22,23 +22,45 @@ from pokeverse.catalog.pokeapi import (
 FIXTURES = Path(__file__).parent / "fixtures" / "pokeapi"
 
 PIKACHU = Pokemon(
-    25,
-    "pikachu",
-    (PokemonType.ELECTRIC,),
-    BaseStats(35, 55, 40, 50, 50, 90),
-    frozenset({"thunderbolt", "quick-attack", "iron-tail", "thunder-wave", "surf", "volt-tackle"}),
+    pokedex_id=25,
+    name="pikachu",
+    types=(PokemonType.ELECTRIC,),
+    stats=BaseStats(hp=35, attack=55, defense=40, special_attack=50, special_defense=50, speed=90),
+    learnset=frozenset(
+        {"thunderbolt", "quick-attack", "iron-tail", "thunder-wave", "surf", "volt-tackle"}
+    ),
 )
 CHARIZARD = Pokemon(
-    6,
-    "charizard",
-    (PokemonType.FIRE, PokemonType.FLYING),
-    BaseStats(78, 84, 78, 109, 85, 100),
-    frozenset(
+    pokedex_id=6,
+    name="charizard",
+    types=(PokemonType.FIRE, PokemonType.FLYING),
+    stats=BaseStats(
+        hp=78, attack=84, defense=78, special_attack=109, special_defense=85, speed=100
+    ),
+    learnset=frozenset(
         {"flamethrower", "air-slash", "dragon-claw", "earthquake", "swords-dance", "fire-fang"}
     ),
 )
-THUNDERBOLT = Move(85, "thunderbolt", PokemonType.ELECTRIC, DamageClass.SPECIAL, 90, 100, 0, 15)
-SWORDS_DANCE = Move(14, "swords-dance", PokemonType.NORMAL, DamageClass.STATUS, None, None, 0, 20)
+THUNDERBOLT = Move(
+    move_id=85,
+    name="thunderbolt",
+    type=PokemonType.ELECTRIC,
+    damage_class=DamageClass.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+SWORDS_DANCE = Move(
+    move_id=14,
+    name="swords-dance",
+    type=PokemonType.NORMAL,
+    damage_class=DamageClass.STATUS,
+    power=None,
+    accuracy=None,
+    priority=0,
+    pp=20,
+)
 
 Handler = Callable[[httpx.Request], httpx.Response]
 

@@ -2,13 +2,13 @@ from pokeverse.catalog import BaseStats, Pokemon, PokemonType
 from pokeverse.teams import Team, analyze_team
 
 T = PokemonType
-STATS = BaseStats(80, 80, 80, 80, 80, 80)
-CHARIZARD = Pokemon(6, "charizard", (T.FIRE, T.FLYING), STATS)
-BLASTOISE = Pokemon(9, "blastoise", (T.WATER,), STATS)
-VENUSAUR = Pokemon(3, "venusaur", (T.GRASS, T.POISON), STATS)
-GARCHOMP = Pokemon(445, "garchomp", (T.DRAGON, T.GROUND), STATS)
-FLYGON = Pokemon(330, "flygon", (T.GROUND, T.DRAGON), STATS)
-LAPRAS = Pokemon(131, "lapras", (T.WATER, T.ICE), STATS)
+STATS = BaseStats(hp=80, attack=80, defense=80, special_attack=80, special_defense=80, speed=80)
+CHARIZARD = Pokemon(pokedex_id=6, name="charizard", types=(T.FIRE, T.FLYING), stats=STATS)
+BLASTOISE = Pokemon(pokedex_id=9, name="blastoise", types=(T.WATER,), stats=STATS)
+VENUSAUR = Pokemon(pokedex_id=3, name="venusaur", types=(T.GRASS, T.POISON), stats=STATS)
+GARCHOMP = Pokemon(pokedex_id=445, name="garchomp", types=(T.DRAGON, T.GROUND), stats=STATS)
+FLYGON = Pokemon(pokedex_id=330, name="flygon", types=(T.GROUND, T.DRAGON), stats=STATS)
+LAPRAS = Pokemon(pokedex_id=131, name="lapras", types=(T.WATER, T.ICE), stats=STATS)
 STARTERS = Team((CHARIZARD, BLASTOISE, VENUSAUR))
 
 

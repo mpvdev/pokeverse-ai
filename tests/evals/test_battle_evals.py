@@ -10,17 +10,60 @@ from pokeverse.llm import Completion
 T = PokemonType
 D = DamageClass
 
-EARTHQUAKE = Move(89, "earthquake", T.GROUND, D.PHYSICAL, 100, 100, 0, 10)
-DRAGON_CLAW = Move(337, "dragon-claw", T.DRAGON, D.PHYSICAL, 80, 100, 0, 15)
-FLAMETHROWER = Move(53, "flamethrower", T.FIRE, D.SPECIAL, 90, 100, 0, 15)
+EARTHQUAKE = Move(
+    move_id=89,
+    name="earthquake",
+    type=T.GROUND,
+    damage_class=D.PHYSICAL,
+    power=100,
+    accuracy=100,
+    priority=0,
+    pp=10,
+)
+DRAGON_CLAW = Move(
+    move_id=337,
+    name="dragon-claw",
+    type=T.DRAGON,
+    damage_class=D.PHYSICAL,
+    power=80,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
+FLAMETHROWER = Move(
+    move_id=53,
+    name="flamethrower",
+    type=T.FIRE,
+    damage_class=D.SPECIAL,
+    power=90,
+    accuracy=100,
+    priority=0,
+    pp=15,
+)
 LEARNSET = frozenset({"earthquake", "dragon-claw", "flamethrower"})
 
 GARCHOMP = Battler(
-    Pokemon(445, "garchomp", (T.DRAGON, T.GROUND), BaseStats(108, 130, 95, 80, 85, 102), LEARNSET),
+    Pokemon(
+        pokedex_id=445,
+        name="garchomp",
+        types=(T.DRAGON, T.GROUND),
+        stats=BaseStats(
+            hp=108, attack=130, defense=95, special_attack=80, special_defense=85, speed=102
+        ),
+        learnset=LEARNSET,
+    ),
     (EARTHQUAKE, DRAGON_CLAW),
 )
 CHARIZARD = Battler(
-    Pokemon(6, "charizard", (T.FIRE, T.FLYING), BaseStats(78, 84, 78, 109, 85, 100), LEARNSET),
+    Pokemon(
+        pokedex_id=6,
+        name="charizard",
+        types=(T.FIRE, T.FLYING),
+        stats=BaseStats(
+            hp=78, attack=84, defense=78, special_attack=109, special_defense=85, speed=100
+        ),
+        learnset=LEARNSET,
+    ),
     (FLAMETHROWER,),
 )
 TEAM = [GARCHOMP]
