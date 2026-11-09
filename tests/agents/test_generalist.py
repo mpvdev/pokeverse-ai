@@ -9,7 +9,7 @@ from pokeverse.agents.generalist import (
     GENERALIST_SYSTEM_PROMPT,
     GeneralistAgent,
 )
-from pokeverse.catalog import PokemonCatalog, SqlitePokemonRepository
+from pokeverse.catalog import PokemonCatalog, SqlitePokemonRepository, StaticSource
 from pokeverse.llm import Completion, LlmRequestError
 
 
@@ -26,7 +26,7 @@ class ScriptedChat:
 @pytest.fixture
 def catalog() -> Iterator[PokemonCatalog]:
     with SqlitePokemonRepository(":memory:") as repository:
-        yield PokemonCatalog(repository)
+        yield PokemonCatalog(repository, StaticSource())
 
 
 def test_generalist_has_every_tool_and_one_schema(catalog: PokemonCatalog) -> None:

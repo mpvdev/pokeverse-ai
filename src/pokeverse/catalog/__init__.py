@@ -1,10 +1,12 @@
-"""Domain models and services for the local Pokémon catalog."""
+"""Domain models and services for the Pokémon catalog (PokéAPI, synced to SQLite)."""
 
 from pokeverse.catalog.models import (
     BaseStats,
     DamageClass,
     Move,
     Pokemon,
+    PokemonEntry,
+    PokemonIndex,
     PokemonType,
     parse_identifier,
 )
@@ -14,6 +16,8 @@ from pokeverse.catalog.service import (
     MoveNotInCatalogError,
     PokemonCatalog,
     PokemonNotInCatalogError,
+    PokemonSource,
+    StaticSource,
     UpstreamUnavailableError,
 )
 
@@ -25,9 +29,13 @@ __all__ = [
     "MoveNotInCatalogError",
     "Pokemon",
     "PokemonCatalog",
+    "PokemonEntry",
+    "PokemonIndex",
     "PokemonNotInCatalogError",
+    "PokemonSource",
     "PokemonType",
     "SqlitePokemonRepository",
+    "StaticSource",
     "UpstreamUnavailableError",
     "parse_identifier",
 ]

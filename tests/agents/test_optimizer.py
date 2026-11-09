@@ -11,6 +11,7 @@ from pokeverse.catalog import (
     PokemonCatalog,
     PokemonType,
     SqlitePokemonRepository,
+    StaticSource,
 )
 from pokeverse.llm import Completion, LlmRequestError
 from pokeverse.teams import Team
@@ -39,9 +40,10 @@ class ScriptedChat:
 @pytest.fixture
 def catalog() -> Iterator[PokemonCatalog]:
     with SqlitePokemonRepository(":memory:") as repository:
-        for pokemon in (RESHIRAM, TURTONATOR, GOUGING_FIRE, VOLCANION, ARCANINE, CORVIKNIGHT):
-            repository.save(pokemon)
-        yield PokemonCatalog(repository)
+        source = StaticSource(
+            [RESHIRAM, TURTONATOR, GOUGING_FIRE, VOLCANION, ARCANINE, CORVIKNIGHT]
+        )
+        yield PokemonCatalog(repository, source)
 
 
 def reply(swaps: list[tuple[str, str]] = (), claims: list[tuple[str, str, str]] = ()) -> dict:

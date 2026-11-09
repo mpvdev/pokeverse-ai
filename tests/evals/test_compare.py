@@ -11,6 +11,7 @@ from pokeverse.catalog import (
     PokemonCatalog,
     PokemonType,
     SqlitePokemonRepository,
+    StaticSource,
 )
 from pokeverse.evals.compare import (
     COMPARE_CASES,
@@ -124,9 +125,7 @@ class ScriptedGeneralist:
 @pytest.fixture
 def catalog() -> Iterator[PokemonCatalog]:
     with SqlitePokemonRepository(":memory:") as repository:
-        for pokemon in (GARCHOMP, EMPOLEON, CLEFABLE):
-            repository.save(pokemon)
-        yield PokemonCatalog(repository)
+        yield PokemonCatalog(repository, StaticSource([GARCHOMP, EMPOLEON, CLEFABLE]))
 
 
 def test_run_case_single_agent(catalog: PokemonCatalog) -> None:

@@ -15,6 +15,7 @@ from pokeverse.catalog import (
     PokemonCatalog,
     PokemonType,
     SqlitePokemonRepository,
+    StaticSource,
 )
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.llm import Completion, LlmRequestError, LlmSettings, OpenAIChat, ToolCall
@@ -39,9 +40,7 @@ class ScriptedChat:
 @pytest.fixture
 def catalog() -> Iterator[PokemonCatalog]:
     with SqlitePokemonRepository(":memory:") as repository:
-        for pokemon in (PIKACHU, CHARIZARD, BLASTOISE):
-            repository.save(pokemon)
-        yield PokemonCatalog(repository)
+        yield PokemonCatalog(repository, StaticSource([PIKACHU, CHARIZARD, BLASTOISE]))
 
 
 def proposal(*names: str) -> dict[str, Any]:

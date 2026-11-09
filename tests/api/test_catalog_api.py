@@ -39,25 +39,20 @@ def test_names_and_ids_are_normalized(client: TestClient, identifier: str) -> No
     assert client.get(f"/pokemon/{identifier}").json()["name"] == "pikachu"
 
 
-def test_second_lookup_is_local_and_survives_an_outage(
+def test_every_request_fetches_from_pokeapi(client: TestClient, pokeapi: FakePokeApi) -> None:
+    client.get("/pokemon/pikachu")
+    client.get("/pokemon/pikachu")
+
+    assert pokeapi.requests == ["/api/v2/pokemon/pikachu"] * 2
+
+
+def test_synced_pokemon_are_not_served_during_an_outage(
     client: TestClient, pokeapi: FakePokeApi
 ) -> None:
     client.get("/pokemon/pikachu")
     pokeapi.down = True
 
-    assert client.get("/pokemon/pikachu").status_code == 200
-    assert client.get("/pokemon/25", params={"offline": True}).status_code == 200
-    assert pokeapi.requests == ["/api/v2/pokemon/pikachu"]
-
-
-def test_offline_miss_is_404_without_calling_upstream(
-    client: TestClient, pokeapi: FakePokeApi
-) -> None:
-    response = client.get("/pokemon/pikachu", params={"offline": True})
-
-    assert response.status_code == 404
-    assert "not in the local catalog" in response.json()["detail"]
-    assert pokeapi.requests == []
+    assert client.get("/pokemon/pikachu").status_code == 503
 
 
 def test_unknown_pokemon_is_404(client: TestClient) -> None:
@@ -73,7 +68,7 @@ def test_upstream_outage_is_503(client: TestClient, pokeapi: FakePokeApi) -> Non
     response = client.get("/pokemon/pikachu")
 
     assert response.status_code == 503
-    assert "upstream failed" in response.json()["detail"]
+    assert "PokéAPI could not provide" in response.json()["detail"]
 
 
 @pytest.mark.parametrize("identifier", ["0", "%20%20", "-"])
@@ -86,25 +81,26 @@ def test_invalid_identifiers_are_422_before_any_lookup(
     assert pokeapi.requests == []
 
 
-def test_offline_flag_is_validated(client: TestClient) -> None:
-    response = client.get("/pokemon/pikachu", params={"offline": "maybe"})
+def test_list_pages_through_the_pokeapi_index(client: TestClient) -> None:
+    first = client.get("/pokemon", params={"limit": 1}).json()
+    second = client.get("/pokemon", params={"limit": 1, "offset": 1}).json()
 
-    assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["query", "offline"]
+    assert first == {"count": 2, "results": [{"pokedex_id": 6, "name": "charizard"}]}
+    assert second["results"] == [{"pokedex_id": 25, "name": "pikachu"}]
 
 
-def test_list_shows_stored_pokemon_in_pokedex_order_offline(
-    client: TestClient, pokeapi: FakePokeApi
+@pytest.mark.parametrize("params", [{"limit": 0}, {"limit": 101}, {"offset": -1}])
+def test_list_paging_is_validated(
+    client: TestClient, pokeapi: FakePokeApi, params: dict[str, int]
 ) -> None:
-    assert client.get("/pokemon").json() == []
-    client.get("/pokemon/pikachu")
-    client.get("/pokemon/charizard")
+    assert client.get("/pokemon", params=params).status_code == 422
+    assert pokeapi.requests == []
+
+
+def test_list_during_outage_is_503(client: TestClient, pokeapi: FakePokeApi) -> None:
     pokeapi.down = True
 
-    listed = client.get("/pokemon").json()
-
-    assert [entry["name"] for entry in listed] == ["charizard", "pikachu"]
-    assert "learnset" not in listed[0]
+    assert client.get("/pokemon").status_code == 503
 
 
 def test_learnset(client: TestClient, pokeapi: FakePokeApi) -> None:

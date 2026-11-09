@@ -139,6 +139,20 @@ class Move(FrozenModel):
         return self.model_dump(mode="json")
 
 
+class PokemonEntry(FrozenModel):
+    """One line of the upstream Pokémon index: an id and its slug, no details."""
+
+    pokedex_id: int = Field(gt=0)
+    name: Slug
+
+
+class PokemonIndex(FrozenModel):
+    """One page of the upstream Pokémon index; ``count`` is the total across pages."""
+
+    count: int = Field(ge=0)
+    results: tuple[PokemonEntry, ...]
+
+
 def parse_identifier(name_or_id: str | int) -> str | int:
     """Lightly normalize a user-supplied Pokémon name or Pokédex id.
 

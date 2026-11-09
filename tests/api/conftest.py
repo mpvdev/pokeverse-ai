@@ -25,6 +25,8 @@ class FakePokeApi:
         self.requests.append(request.url.path)
         if self.down:
             raise httpx.ConnectError("connection refused")
+        if request.url.path.endswith("/pokemon"):
+            return httpx.Response(200, json=self.index(request.url.params))
         resource, name = request.url.path.rstrip("/").split("/")[-2:]
         name = {"25": "pikachu", "6": "charizard", "85": "thunderbolt"}.get(name, name)
         folder = FIXTURES if resource == "pokemon" else FIXTURES / resource
@@ -32,6 +34,18 @@ class FakePokeApi:
         if not fixture.exists():
             return httpx.Response(404, json={"detail": "Not Found"})
         return httpx.Response(200, json=json.loads(fixture.read_text()))
+
+    @staticmethod
+    def index(params: httpx.QueryParams) -> dict[str, object]:
+        entries = sorted((json.loads(p.read_text())["id"], p.stem) for p in FIXTURES.glob("*.json"))
+        offset, limit = int(params["offset"]), int(params["limit"])
+        return {
+            "count": len(entries),
+            "results": [
+                {"name": name, "url": f"https://pokeapi.co/api/v2/pokemon/{pokedex_id}/"}
+                for pokedex_id, name in entries[offset : offset + limit]
+            ],
+        }
 
 
 @pytest.fixture
@@ -44,14 +58,13 @@ def client(tmp_path: Path, pokeapi: FakePokeApi) -> Iterator[TestClient]:
     db_path = tmp_path / "catalog.db"
 
     @contextmanager
-    def catalogs(offline: bool) -> Iterator[PokemonCatalog]:
-        with SqlitePokemonRepository(db_path) as repository:
-            if offline:
-                yield PokemonCatalog(repository)
-                return
-            transport = httpx.MockTransport(pokeapi.handler)
-            with PokeApiClient(transport=transport) as upstream:
-                yield PokemonCatalog(repository, upstream)
+    def catalogs() -> Iterator[PokemonCatalog]:
+        transport = httpx.MockTransport(pokeapi.handler)
+        with (
+            SqlitePokemonRepository(db_path) as repository,
+            PokeApiClient(transport=transport) as upstream,
+        ):
+            yield PokemonCatalog(repository, upstream)
 
     provider: CatalogProvider = catalogs
     with TestClient(create_app(provider)) as test_client:

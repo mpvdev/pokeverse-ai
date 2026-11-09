@@ -13,6 +13,7 @@ from pokeverse.catalog import (
     PokemonCatalog,
     PokemonType,
     SqlitePokemonRepository,
+    StaticSource,
 )
 from pokeverse.llm import Completion, LlmRequestError, ToolCall
 
@@ -73,8 +74,7 @@ class RoutingChat:
 @pytest.fixture
 def catalog() -> Iterator[PokemonCatalog]:
     with SqlitePokemonRepository(":memory:") as repository:
-        repository.save(PIKACHU)
-        yield PokemonCatalog(repository)
+        yield PokemonCatalog(repository, StaticSource([PIKACHU]))
 
 
 def test_supervisor_exposes_specialists_as_tools(catalog: PokemonCatalog) -> None:

@@ -23,20 +23,16 @@ from pokeverse.catalog import (
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.paths import default_db_path
 
-type CatalogProvider = Callable[[bool], AbstractContextManager[PokemonCatalog]]
+type CatalogProvider = Callable[[], AbstractContextManager[PokemonCatalog]]
 
 
 def sqlite_catalogs(db_path: Path) -> CatalogProvider:
     """Opens the catalog per use, in the calling thread: SQLite connections are per thread."""
 
     @contextmanager
-    def open_catalog(offline: bool) -> Iterator[PokemonCatalog]:
-        with SqlitePokemonRepository(db_path) as repository:
-            if offline:
-                yield PokemonCatalog(repository)
-                return
-            with PokeApiClient() as client:
-                yield PokemonCatalog(repository, client)
+    def open_catalog() -> Iterator[PokemonCatalog]:
+        with SqlitePokemonRepository(db_path) as repository, PokeApiClient() as client:
+            yield PokemonCatalog(repository, client)
 
     return open_catalog
 

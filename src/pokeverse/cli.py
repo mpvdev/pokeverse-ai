@@ -41,6 +41,7 @@ from pokeverse.battles import (
     run_battle,
 )
 from pokeverse.catalog import (
+    CatalogError,
     Move,
     MoveNotInCatalogError,
     Pokemon,
@@ -121,13 +122,9 @@ def main(
 
 
 @contextmanager
-def open_catalog(settings: Settings, *, offline: bool) -> Iterator[PokemonCatalog]:
-    with SqlitePokemonRepository(settings.db_path) as repository:
-        if offline:
-            yield PokemonCatalog(repository)
-            return
-        with PokeApiClient() as client:
-            yield PokemonCatalog(repository, client)
+def open_catalog(settings: Settings) -> Iterator[PokemonCatalog]:
+    with SqlitePokemonRepository(settings.db_path) as repository, PokeApiClient() as client:
+        yield PokemonCatalog(repository, client)
 
 
 def format_pokemon(pokemon: Pokemon) -> str:
@@ -206,15 +203,12 @@ def pokemon_command(
     ctx: typer.Context,
     name_or_id: Annotated[str, typer.Argument(help="Pokémon name (e.g. pikachu) or Pokédex id.")],
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
-    offline: Annotated[
-        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
-    ] = False,
 ) -> None:
-    """Look up a Pokémon, importing it from PokéAPI if not stored locally."""
+    """Look up a Pokémon on PokéAPI (synced to the local database)."""
     settings: Settings = ctx.obj
     try:
         identifier = normalize_identifier(name_or_id)
-        with open_catalog(settings, offline=offline) as catalog:
+        with open_catalog(settings) as catalog:
             pokemon = catalog.get(identifier)
     except ValueError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
@@ -233,20 +227,25 @@ def pokemon_command(
 @app.command("list")
 def list_command(
     ctx: typer.Context,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=100, help="Page size.")] = 20,
+    offset: Annotated[int, typer.Option("--offset", min=0, help="Entries to skip.")] = 0,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
 ) -> None:
-    """List Pokémon stored in the local catalog (no network access)."""
+    """List Pokémon names and ids from PokéAPI, one page at a time."""
     settings: Settings = ctx.obj
-    with open_catalog(settings, offline=True) as catalog:
-        stored = catalog.list_all()
+    try:
+        with open_catalog(settings) as catalog:
+            page = catalog.index(limit, offset)
+    except CatalogError as error:
+        raise fail(str(error), EXIT_UPSTREAM_UNAVAILABLE) from error
 
     if as_json:
-        typer.echo(json.dumps([pokemon.to_dict() for pokemon in stored]))
-    elif not stored:
-        typer.echo("The local catalog is empty. Try: pokeverse pokemon pikachu")
-    else:
-        for pokemon in stored:
-            typer.echo(format_pokemon(pokemon))
+        typer.echo(json.dumps(page.model_dump(mode="json")))
+        return
+    for entry in page.results:
+        typer.echo(f"#{entry.pokedex_id:04d} {entry.name}")
+    shown = f"{offset + 1}-{offset + len(page.results)}" if page.results else "none"
+    typer.echo(f"({shown} of {page.count})")
 
 
 @app.command("move")
@@ -254,15 +253,12 @@ def move_command(
     ctx: typer.Context,
     name_or_id: Annotated[str, typer.Argument(help="Move name (e.g. 'Swords Dance') or id.")],
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
-    offline: Annotated[
-        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
-    ] = False,
 ) -> None:
-    """Look up a move, importing it from PokéAPI if not stored locally."""
+    """Look up a move on PokéAPI (synced to the local database)."""
     settings: Settings = ctx.obj
     try:
         identifier = normalize_identifier(name_or_id)
-        with open_catalog(settings, offline=offline) as catalog:
+        with open_catalog(settings) as catalog:
             move = catalog.get_move(identifier)
     except ValueError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
@@ -279,15 +275,12 @@ def learnset_command(
     ctx: typer.Context,
     name_or_id: Annotated[str, typer.Argument(help="Pokémon name (e.g. pikachu) or Pokédex id.")],
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
-    offline: Annotated[
-        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
-    ] = False,
 ) -> None:
     """List the moves a Pokémon can learn (names only; no move lookups)."""
     settings: Settings = ctx.obj
     try:
         identifier = normalize_identifier(name_or_id)
-        with open_catalog(settings, offline=offline) as catalog:
+        with open_catalog(settings) as catalog:
             pokemon = catalog.get(identifier)
     except ValueError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
@@ -314,16 +307,13 @@ def moveset_command(
         typer.Argument(help=f"1-{MAX_MOVES} move names; omit for the default moveset."),
     ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
-    offline: Annotated[
-        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
-    ] = False,
 ) -> None:
-    """Check a battle moveset, or show the default one (first use fetches every learnable move)."""
+    """Check a battle moveset, or show the default one (fetches every learnable move)."""
     settings: Settings = ctx.obj
     try:
         if moves and len(moves) > MAX_MOVES:
             raise ValueError(f"a battler must have between 1 and {MAX_MOVES} moves")
-        with open_catalog(settings, offline=offline) as catalog:
+        with open_catalog(settings) as catalog:
             battler = resolve_battler(catalog, pokemon, moves or [])
     except ValueError as error:
         raise fail(str(error), EXIT_INVALID_INPUT) from error
@@ -347,14 +337,11 @@ def damage_command(
     move: Annotated[str, typer.Argument(help="Move used by the attacker.")],
     defender: Annotated[str, typer.Argument(help="Defending Pokémon.")],
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
-    offline: Annotated[
-        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
-    ] = False,
 ) -> None:
     """Damage range of one move at level 50 (no critical hit), plus the critical-hit maximum."""
     settings: Settings = ctx.obj
     try:
-        with open_catalog(settings, offline=offline) as catalog:
+        with open_catalog(settings) as catalog:
             source = catalog.get(normalize_identifier(attacker))
             target = catalog.get(normalize_identifier(defender))
             used = catalog.get_move(normalize_identifier(move))
@@ -423,9 +410,6 @@ def battle_command(
         ),
     ] = True,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
-    offline: Annotated[
-        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
-    ] = False,
 ) -> None:
     """Simulate battles; players are code (greedy, random) or the Battle Strategy Agent (LLM)."""
     settings: Settings = ctx.obj
@@ -445,7 +429,7 @@ def battle_command(
                         f"a battle team must have between 1 and {MAX_TEAM_SIZE} battlers"
                     )
             chat = OpenAIChat(LlmSettings.from_env()) if "agent" in names else None
-            with open_catalog(settings, offline=offline) as catalog:
+            with open_catalog(settings) as catalog:
                 teams = [
                     [resolve_battler(catalog, *parse_member(spec)) for spec in side]
                     for side in (side1, side2)
@@ -562,9 +546,6 @@ def scout_command(
         typer.Option("--side2", help="An opposing member, same format as --side1."),
     ],
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
-    offline: Annotated[
-        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
-    ] = False,
     show_usage: Annotated[
         bool, typer.Option("--usage", help="Print token usage to stderr.")
     ] = False,
@@ -579,7 +560,7 @@ def scout_command(
                         f"a battle team must have between 1 and {MAX_TEAM_SIZE} battlers"
                     )
             chat = OpenAIChat(LlmSettings.from_env())
-            with open_catalog(settings, offline=offline) as catalog:
+            with open_catalog(settings) as catalog:
                 own = [resolve_battler(catalog, *parse_member(spec)) for spec in side1]
                 foe = [resolve_battler(catalog, *parse_member(spec)) for spec in side2]
             result = OpponentAnalysisAgent(chat).analyze(own, foe)
@@ -643,9 +624,6 @@ def battle_eval_command(
     seeds: Annotated[int, typer.Option("--seeds", min=1, help="Battles per system.")] = 5,
     seed_start: Annotated[int, typer.Option("--seed-start", help="First seed.")] = 0,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
-    offline: Annotated[
-        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
-    ] = False,
 ) -> None:
     """Win rate (95% CI), mistakes and tokens of each system against greedy; LLM systems cost."""
     settings: Settings = ctx.obj
@@ -661,7 +639,7 @@ def battle_eval_command(
             needs_llm = any(system in LLM_SYSTEMS for system in chosen)
             chat = OpenAIChat(LlmSettings.from_env()) if needs_llm else None
             for scenario in scenarios:
-                with open_catalog(settings, offline=offline) as catalog:
+                with open_catalog(settings) as catalog:
                     team, opponent = load_scenario(catalog, scenario)
                 reports[scenario.id] = [
                     run_system(
@@ -701,9 +679,6 @@ def battle_feedback_command(
     test: Annotated[int, typer.Option("--test", min=1, help="Test battles per system.")] = 5,
     seed_start: Annotated[int, typer.Option("--seed-start", help="First seed.")] = 0,
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
-    offline: Annotated[
-        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
-    ] = False,
 ) -> None:
     """Learn lessons from the agent's mistakes on training seeds; measure them on new seeds."""
     settings: Settings = ctx.obj
@@ -713,7 +688,7 @@ def battle_feedback_command(
         with llm_errors():
             (scenario,) = select_scenarios([scenario_id])
             chat = OpenAIChat(LlmSettings.from_env())
-            with open_catalog(settings, offline=offline) as catalog:
+            with open_catalog(settings) as catalog:
                 team, opponent = load_scenario(catalog, scenario)
             report = feedback_experiment(
                 team,
@@ -753,16 +728,13 @@ def team_command(
         list[str], typer.Argument(help="1-6 Pokémon names or Pokédex ids (repeats allowed).")
     ],
     as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
-    offline: Annotated[
-        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
-    ] = False,
 ) -> None:
     """Analyze a team's type weaknesses and coverage (deterministic, no LLM)."""
     settings: Settings = ctx.obj
     if len(names) > MAX_TEAM_SIZE:
         raise fail(f"a team can have at most {MAX_TEAM_SIZE} Pokémon", EXIT_INVALID_INPUT)
     try:
-        with open_catalog(settings, offline=offline) as catalog:
+        with open_catalog(settings) as catalog:
             members = tuple(catalog.get(normalize_identifier(name)) for name in names)
         analysis = analyze_team(Team(members))
     except ValueError as error:
@@ -802,7 +774,7 @@ def build_command(
     settings: Settings = ctx.obj
     with llm_errors():
         chat = OpenAIChat(LlmSettings.from_env())
-        with open_catalog(settings, offline=False) as catalog:
+        with open_catalog(settings) as catalog:
             result = TeamCompositionAgent(chat, catalog).build(request)
 
     if as_json:
@@ -843,7 +815,7 @@ def optimize_command(
     try:
         with llm_errors():
             chat = OpenAIChat(LlmSettings.from_env())
-            with open_catalog(settings, offline=False) as catalog:
+            with open_catalog(settings) as catalog:
                 team = Team(tuple(catalog.get(normalize_identifier(n)) for n in names))
                 result = TeamOptimizationAgent(chat, catalog).optimize(
                     team, goal=goal, keep=keep or (), notes=notes
@@ -900,7 +872,7 @@ def advise_command(
     with llm_errors():
         supervisor_mode = cast("OptimizeMode", optimize)
         chat = OpenAIChat(LlmSettings.from_env())
-        with open_catalog(settings, offline=False) as catalog:
+        with open_catalog(settings) as catalog:
             result = Supervisor(chat, catalog, optimize=supervisor_mode).run(request)
 
     typer.echo(json.dumps(result.to_dict()) if as_json else result.answer)
@@ -946,14 +918,14 @@ def ask_command(
         bool, typer.Option("--json", help="Print a validated, structured answer as JSON.")
     ] = False,
 ) -> None:
-    """Ask the LLM a question, letting it look up Pokémon in the local catalog."""
+    """Ask the LLM a question, letting it look up Pokémon in the catalog."""
     settings: Settings = ctx.obj
     with llm_errors():
         chat = OpenAIChat(LlmSettings.from_env())
         with ExitStack() as stack:
             tools = ()
             if use_tools:
-                catalog = stack.enter_context(open_catalog(settings, offline=False))
+                catalog = stack.enter_context(open_catalog(settings))
                 tools = make_catalog_tools(catalog)
             completion = chat.complete(
                 question,
@@ -1014,11 +986,11 @@ def research_command(
         bool, typer.Option("--usage", help="Print tool calls and token usage to stderr.")
     ] = False,
 ) -> None:
-    """Ask the Pokémon Research Agent; answers are grounded in the local catalog."""
+    """Ask the Pokémon Research Agent; answers are grounded in catalog lookups."""
     settings: Settings = ctx.obj
     with llm_errors():
         chat = OpenAIChat(LlmSettings.from_env())
-        with open_catalog(settings, offline=False) as catalog:
+        with open_catalog(settings) as catalog:
             result = ResearchAgent(chat, catalog).ask(question)
 
     if as_json:
@@ -1056,7 +1028,7 @@ def eval_command(
     results: list[EvalResult] = []
     with llm_errors():
         chat = OpenAIChat(LlmSettings.from_env())
-        with open_catalog(settings, offline=False) as catalog:
+        with open_catalog(settings) as catalog:
             agent = ResearchAgent(chat, catalog)
             for case in cases:
                 outcome = run_case(agent, case)
@@ -1109,7 +1081,7 @@ def compare_command(
     aborted: Exception | None = None
     with llm_errors():
         chat = OpenAIChat(LlmSettings.from_env())
-        with open_catalog(settings, offline=False) as catalog:
+        with open_catalog(settings) as catalog:
             for case in cases:
                 for system in chosen:
                     try:

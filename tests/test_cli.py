@@ -38,6 +38,16 @@ class Upstream:
         self.requests.append(request.url.path)
         if self.down:
             raise httpx.ConnectError("connection refused")
+        if request.url.path.endswith("/pokemon"):
+            entries = sorted(
+                (json.loads(p.read_text())["id"], p.stem) for p in FIXTURES.glob("*.json")
+            )
+            offset, limit = int(request.url.params["offset"]), int(request.url.params["limit"])
+            results = [
+                {"name": name, "url": f"https://pokeapi.co/api/v2/pokemon/{pokedex_id}/"}
+                for pokedex_id, name in entries[offset : offset + limit]
+            ]
+            return httpx.Response(200, json={"count": len(entries), "results": results})
         resource, name = request.url.path.rstrip("/").split("/")[-2:]
         name = {"25": "pikachu", "6": "charizard"}.get(name, name)
         folder = FIXTURES if resource == "pokemon" else FIXTURES / resource
@@ -108,21 +118,20 @@ def test_pokemon_lookup_by_id_as_json(db: str, upstream: Upstream) -> None:
     }
 
 
-def test_second_lookup_is_served_locally(db: str, upstream: Upstream) -> None:
+def test_every_lookup_fetches_from_pokeapi(db: str, upstream: Upstream) -> None:
     invoke(db, "pokemon", "pikachu")
     upstream.down = True
 
     result = invoke(db, "pokemon", "pikachu")
 
-    assert result.exit_code == 0
-    assert upstream.requests == ["/api/v2/pokemon/pikachu"]
+    assert result.exit_code == EXIT_UPSTREAM_UNAVAILABLE
+    assert upstream.requests == ["/api/v2/pokemon/pikachu"] * 2
 
 
-def test_offline_lookup_never_calls_upstream(db: str, upstream: Upstream) -> None:
+def test_offline_option_is_gone(db: str, upstream: Upstream) -> None:
     result = invoke(db, "pokemon", "pikachu", "--offline")
 
-    assert result.exit_code == EXIT_NOT_FOUND
-    assert "not in the local catalog" in result.stderr
+    assert result.exit_code == 2
     assert upstream.requests == []
 
 
@@ -141,7 +150,7 @@ def test_upstream_outage_exits_unavailable(db: str, upstream: Upstream) -> None:
 
     assert result.exit_code == EXIT_UPSTREAM_UNAVAILABLE
     assert result.stdout == ""
-    assert "upstream failed" in result.stderr
+    assert "PokéAPI could not provide" in result.stderr
 
 
 @pytest.mark.parametrize("identifier", ["", "   ", "0"])
@@ -154,11 +163,12 @@ def test_invalid_identifier_exits_invalid_input(
     assert upstream.requests == []
 
 
-def test_list_empty_catalog(db: str) -> None:
+def test_list_during_outage_exits_unavailable(db: str, upstream: Upstream) -> None:
+    upstream.down = True
+
     result = invoke(db, "list")
 
-    assert result.exit_code == 0
-    assert "empty" in result.stdout
+    assert result.exit_code == EXIT_UPSTREAM_UNAVAILABLE
 
 
 def test_pokemon_lookup_accepts_pokedex_style_numbers(db: str, upstream: Upstream) -> None:
@@ -181,11 +191,8 @@ def test_move_lookup_prints_summary(db: str, upstream: Upstream) -> None:
     assert upstream.requests == ["/api/v2/move/thunderbolt", "/api/v2/move/swords-dance"]
 
 
-def test_move_json_is_served_locally_after_import(db: str, upstream: Upstream) -> None:
-    invoke(db, "move", "thunderbolt")
-    upstream.down = True
-
-    result = invoke(db, "move", "thunderbolt", "--offline", "--json")
+def test_move_json(db: str, upstream: Upstream) -> None:
+    result = invoke(db, "move", "thunderbolt", "--json")
 
     assert result.exit_code == 0
     assert json.loads(result.stdout)["power"] == 90
@@ -215,7 +222,7 @@ def test_learnset_lists_move_names_without_move_lookups(db: str, upstream: Upstr
         "iron-tail, quick-attack, surf, thunder-wave, thunderbolt, volt-tackle",
     ]
     assert json.loads(as_json.stdout)["learnset"][0] == "iron-tail"
-    assert upstream.requests == ["/api/v2/pokemon/pikachu"]
+    assert upstream.requests == ["/api/v2/pokemon/pikachu"] * 2
 
 
 def test_moveset_prints_the_battler(db: str, upstream: Upstream) -> None:
@@ -336,7 +343,7 @@ def test_battle_prints_teams_events_and_winner(db: str, upstream: Upstream) -> N
 def test_battle_is_reproducible_and_json(db: str, upstream: Upstream) -> None:
     args = ["battle", "--side1", "pikachu:thunderbolt", "--side2", "pikachu:thunderbolt"]
     first = json.loads(invoke(db, *args, "--seed", "5", "--json").stdout)
-    second = json.loads(invoke(db, *args, "--seed", "5", "--json", "--offline").stdout)
+    second = json.loads(invoke(db, *args, "--seed", "5", "--json").stdout)
 
     assert first == second
     assert first["players"] == ["greedy", "greedy"]
@@ -426,16 +433,15 @@ def test_team_size_is_checked_before_any_lookup(db: str, upstream: Upstream) -> 
     assert upstream.requests == []
 
 
-def test_list_shows_stored_pokemon_in_pokedex_order(db: str, upstream: Upstream) -> None:
-    invoke(db, "pokemon", "pikachu")
-    invoke(db, "pokemon", "charizard")
-    upstream.down = True
+def test_list_pages_through_the_pokeapi_index(db: str, upstream: Upstream) -> None:
+    text = invoke(db, "list", "--limit", "1")
+    as_json = invoke(db, "list", "--limit", "1", "--offset", "1", "--json")
 
-    text = invoke(db, "list")
-    as_json = invoke(db, "list", "--json")
-
-    assert text.stdout == "#0006 Charizard — Fire / Flying\n#0025 Pikachu — Electric\n"
-    assert [entry["name"] for entry in json.loads(as_json.stdout)] == ["charizard", "pikachu"]
+    assert text.stdout == "#0006 charizard\n(1-1 of 2)\n"
+    assert json.loads(as_json.stdout) == {
+        "count": 2,
+        "results": [{"pokedex_id": 25, "name": "pikachu"}],
+    }
 
 
 def test_db_path_can_come_from_environment(tmp_path: Path, upstream: Upstream) -> None:

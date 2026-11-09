@@ -69,7 +69,7 @@ class ResearchResult:
 
 
 class ResearchAgent:
-    """Answers Pokémon questions from the local catalog, with typed, checkable output."""
+    """Answers Pokémon questions from the catalog, with typed, checkable output."""
 
     def __init__(self, chat: ChatModel, catalog: PokemonCatalog) -> None:
         self._chat = chat

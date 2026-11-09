@@ -11,6 +11,7 @@ from pokeverse.catalog import (
     PokemonCatalog,
     PokemonType,
     SqlitePokemonRepository,
+    StaticSource,
 )
 from pokeverse.catalog.pokeapi import PokeApiUnavailableError
 
@@ -22,6 +23,7 @@ MR_MIME = Pokemon(
         hp=40, attack=45, defense=65, special_attack=100, special_defense=120, speed=90
     ),
 )
+SOURCE = StaticSource([MR_MIME])
 
 
 class DownSource:
@@ -32,7 +34,6 @@ class DownSource:
 @pytest.fixture
 def repository() -> Iterator[SqlitePokemonRepository]:
     with SqlitePokemonRepository(":memory:") as repo:
-        repo.save(MR_MIME)
         yield repo
 
 
@@ -61,7 +62,7 @@ def test_normalize_identifier(raw: str, expected: str | int) -> None:
 
 
 def test_get_pokemon_returns_canonical_json(repository: SqlitePokemonRepository) -> None:
-    catalog = PokemonCatalog(repository)
+    catalog = PokemonCatalog(repository, SOURCE)
 
     assert get_pokemon(catalog, "Mr. Mime") == MR_MIME.to_dict()
     assert get_pokemon(catalog, "122") == MR_MIME.to_dict()
@@ -71,10 +72,10 @@ def test_get_pokemon_returns_canonical_json(repository: SqlitePokemonRepository)
 @pytest.mark.parametrize(
     ("name_or_id", "source", "error"),
     [
-        ("pikachu", None, "not_found"),
+        ("pikachu", StaticSource(), "not_found"),
         ("pikachu", DownSource(), "unavailable"),
-        ("   ", None, "invalid_identifier"),
-        ("0", None, "invalid_identifier"),
+        ("   ", StaticSource(), "invalid_identifier"),
+        ("0", StaticSource(), "invalid_identifier"),
     ],
 )
 def test_tools_return_errors_as_data(
@@ -95,7 +96,7 @@ def test_tools_return_errors_as_data(
 def test_get_type_matchups_computes_defensive_profile(
     repository: SqlitePokemonRepository,
 ) -> None:
-    result = call_tool(PokemonCatalog(repository), "get_type_matchups", "Mr. Mime")
+    result = call_tool(PokemonCatalog(repository, SOURCE), "get_type_matchups", "Mr. Mime")
 
     assert result["pokemon"] == MR_MIME.to_dict()
     assert result["weak_to"] == {"poison": 2, "ghost": 2, "steel": 2}
@@ -104,7 +105,7 @@ def test_get_type_matchups_computes_defensive_profile(
 
 
 def test_schemas_are_strict_mode_compatible(repository: SqlitePokemonRepository) -> None:
-    catalog = PokemonCatalog(repository)
+    catalog = PokemonCatalog(repository, SOURCE)
     for tool in make_catalog_tools(catalog) + make_team_tools(catalog):
         assert tool.parameters["additionalProperties"] is False
         assert set(tool.parameters["required"]) == set(tool.parameters["properties"])
@@ -116,7 +117,7 @@ def analyze(catalog: PokemonCatalog, names: list[str]) -> dict[str, Any]:
 
 
 def test_analyze_team_returns_compact_analysis(repository: SqlitePokemonRepository) -> None:
-    result = analyze(PokemonCatalog(repository), ["Mr. Mime", "mr-mime"])
+    result = analyze(PokemonCatalog(repository, SOURCE), ["Mr. Mime", "mr-mime"])
 
     assert [m["name"] for m in result["team"]["members"]] == ["mr-mime", "mr-mime"]
     assert {v["attacking_type"] for v in result["vulnerabilities"]} == {
@@ -128,20 +129,20 @@ def test_analyze_team_returns_compact_analysis(repository: SqlitePokemonReposito
 
 
 def test_analyze_team_reports_which_member_failed(repository: SqlitePokemonRepository) -> None:
-    result = analyze(PokemonCatalog(repository), ["mr-mime", "missingno"])
+    result = analyze(PokemonCatalog(repository, SOURCE), ["mr-mime", "missingno"])
 
     assert result["error"] == "not_found"
     assert result["name"] == "missingno"
 
 
 def test_analyze_team_rejects_oversized_team(repository: SqlitePokemonRepository) -> None:
-    result = analyze(PokemonCatalog(repository), ["mr-mime"] * 7)
+    result = analyze(PokemonCatalog(repository, SOURCE), ["mr-mime"] * 7)
 
     assert result["error"] == "invalid_team"
 
 
 def test_score_team_is_compact(repository: SqlitePokemonRepository) -> None:
-    tool = make_score_tool(PokemonCatalog(repository))
+    tool = make_score_tool(PokemonCatalog(repository, SOURCE))
 
     result = tool.handler(names=["Mr. Mime", "mr-mime"])
 
