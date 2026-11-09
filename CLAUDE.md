@@ -5,7 +5,7 @@
 **Project Name:** PokéVerse AI  
 **GitHub Repository:** `mpvdev/pokeverse-ai`  
 **Project Type:** Multi-Agent AI + AWS Portfolio Project  
-**Current Phase:** Phase 3 — Battle Intelligence (not started; Phase 2 complete)  
+**Current Phase:** Phase 4 — Persistent Pokémon World (not started; Phase 3 complete)  
 **Development Approach:** Backend-first, CLI-first, learning-oriented
 
 ### Vision
@@ -628,7 +628,14 @@ The following decisions have already been made:
 - Assistant writes the implementation code; developer reviews it.
 - GitHub Copilot (Claude) in VS Code provides mentorship, architecture guidance, reviews, debugging, and explicitly requested changes.
 
-**Current development phase: Phase 3 — Battle Intelligence** (not started).
+**Current development phase: Phase 4 — Persistent Pokémon World** (not started).
+
+Phase 3 (Battle Intelligence) is complete on branch `phase-3`:
+
+- Catalog extended with base stats, moves and learnsets (schema v4, upgraded in place).
+- Deterministic battle mechanics: level-50 stats, the Gen 6+ damage formula (Showdown's rounding), a seeded, immutable battle engine with validated actions, default movesets, and random/greedy baseline players (`pokeverse battle`, `damage`, `moveset`).
+- Battle Strategy Agent (one LLM call per decision over code-computed facts; legal options as a schema enum; greedy fallback) and Opponent Analysis Agent (threat ranking; counters verified against one-on-one matchups; briefing re-rendered from the live state) (`pokeverse battle --player1 agent`, `scout`).
+- Evaluation: deterministic mistake detection for any player, Battle Evaluation Agent (lessons must cite detected mistakes), win rates with Wilson 95% intervals, and a train/test feedback experiment (`pokeverse battle-eval`, `battle-feedback`).
 
 Phase 2 (Multi-Agent Trainer System) is complete on branch `phase-2`:
 
@@ -656,10 +663,11 @@ See `docs/PROGRESS.md` for detailed progress and next steps.
 
 ## 12. Immediate Next Steps
 
-1. Plan Phase 3 — Battle Intelligence — starting with deterministic battle mechanics (no LLM), one step at a time.
-2. Phase 2 carry-overs: repeated runs per case in `pokeverse compare`; code-enforced team constraints (e.g. "Fire-only"); the Strands spike against the hand-built Supervisor.
+1. Plan Phase 4 — Persistent Pokémon World — starting with trainer profiles and persistent application state, one step at a time.
+2. Phase 3 carry-overs: larger agent samples before ranking battle players (agent results so far overlap with greedy); a richer mistake signal (e.g. comparing against lookahead play) so the feedback loop has something to learn; PP, status conditions and abilities; hidden opponent teams.
+3. Phase 2 carry-overs: repeated runs per case in `pokeverse compare`; code-enforced team constraints (e.g. "Fire-only"); the Strands spike against the hand-built Supervisor.
 
-Implement Phase 3 one step at a time (see `docs/PROGRESS.md`), handing each step to the developer for review before starting the next.
+Implement Phase 4 one step at a time (see `docs/PROGRESS.md`), handing each step to the developer for review before starting the next.
 
 Wait for explicit instructions from the developer.
 

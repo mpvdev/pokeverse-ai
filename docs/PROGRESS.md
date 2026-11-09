@@ -2,9 +2,13 @@
 
 ## Current Phase
 
-**Phase 3 — Battle Intelligence** (in progress, branch `phase-3`). Phase 2 is complete on branch `phase-2`.
+**Phase 4 — Persistent Pokémon World** (not started). Phase 3 is complete on branch `phase-3`.
 
 ## Completed
+
+### Phase 3 — Battle Intelligence (branch `phase-3`)
+
+Deliverable: an AI-assisted battle strategy system. A deterministic, seeded battle engine (catalog stats, moves and learnsets; the Gen 6+ damage formula) plays teams against each other; `pokeverse battle --player1 agent` lets a Battle Strategy Agent choose actions from code-computed facts, briefed by an Opponent Analysis Agent whose counters are verified by code; `pokeverse battle-eval` and `battle-feedback` measure win rates with confidence intervals, detect mistakes deterministically and test lessons from a Battle Evaluation Agent on unseen seeds.
 
 ### Phase 2 — Multi-Agent Trainer System (branch `phase-2`)
 
@@ -118,9 +122,12 @@ Deliverable: an AI-assisted battle strategy system. Battle mechanics are determi
 
 - [x] Step 8: Opponent Analysis Agent — deterministic matchups (`pokeverse.battles.matchups`): for every pair, each side's best move, damage range, who moves first, hits to KO with minimum rolls, and who wins the full-HP one-on-one. `OpponentAnalysisAgent.analyze(own, foe)` (one LLM call before the battle) reads that table and returns a strict `OpponentAnalysis`: every foe ranked once by danger, counters (which of our members handles which threat; team slots as enums) and a plan. Code checks it: each foe must be ranked exactly once, and a counter is `verified` only if the matchup says our member wins that one-on-one. The briefing handed to the Battle Strategy Agent contains only the threat ranking and verified counters (no free prose, per D31), and is re-rendered from the live state at every decision, dropping knocked-out threats and answers. `pokeverse scout --side1 … --side2 …` prints the report and briefing; `pokeverse battle` briefs agent players by default (`--no-analysis` to compare). Found live: with a briefing rendered once before the battle, the agent switched out Pikachu on turn 5 "to keep it for Gyarados" — which had fainted on turn 4 — and lost the seed-1 battle; the live-state briefing fixed it (regression test added). Also caught in tests: "Pikachu counters Charizard" (super effective) is not verified — Charizard wins that one-on-one (2HKO vs 3HKO). Live sanity check, seeds 1–4 vs greedy (Garchomp/Pikachu/Charizard vs Tyranitar/Gyarados/Snorlax): greedy 0/4, agent without analysis 3/4 (~7.3k tokens per battle), agent with analysis 4/4 (~9.5k incl. ~1.3k for the analysis). Four battles are not evidence; Step 9 measures.
 
+- [x] Step 9: battle evaluation and feedback — `pokeverse.battles.review`: `RecordingPlayer` wraps any player; `judge` flags only clear-cut mistakes from engine facts (`missed_ko`: a guaranteed, can't-miss KO that lands first was available; `no_effect`: an immune target while a damaging move existed; `switched_into_ko`); forced replacements are not judged. `BattleReviewAgent` turns detected mistakes into ≤3 lessons that must cite mistake ids (uncited ones dropped; no mistakes → no call); lessons are appended to the strategy prompt. `pokeverse.evals.battles`: two fixed scenarios against a greedy side 2 (`bulk`, `starters`); per system (`greedy`, `agent`, `agent+analysis`) wins, Wilson 95% intervals, turns, mistakes and tokens per battle, fallbacks; `feedback_experiment` learns on training seeds and tests on disjoint seeds, stopping early when there is nothing to learn. CLI: `battle-eval`, `battle-feedback` (progress on stderr). The detector found two real bugs: in itself (a 70%-accurate Focus Blast KO is not "guaranteed") and in the Step 6 greedy baseline (it capped damage at the foe's HP after weighting by accuracy, so it picked a 90% Overheat over a sure Outrage). Fixed greedy makes 0 detected mistakes and is stronger: greedy-vs-greedy side 1 win rate over 50 seeds fell from 26% to 20% (bulk) and 10% to 0% (starters), so earlier agent comparisons were against a weaker opponent. Live (gpt-5.6-terra, effort low, 5 seeds each, vs corrected greedy): bulk — greedy 1/5 (20%, CI 4–62%), agent 2/5 (40%, 12–77%, 7.7k tokens/battle), agent+analysis 2/5 (40%, 12–77%, 8.7k); starters — all 0/5 (CI 0–43%), agent+analysis 0.2 detected mistakes/battle at 9.8k tokens. The intervals overlap everywhere: no system can be ranked from these samples. `battle-feedback` on bulk: the agent won 4/5 training battles with 0 detected mistakes, so there were no lessons and the test battles were skipped. The same seeds gave the agent 2/5 an hour earlier — model variance on top of game randomness. Conclusion: the agents avoid every clear-cut mistake the detector knows; their losses come from judgement and luck, which this feedback loop cannot learn from yet.
+
 ## Next Up
 
-- Phase 3 Step 9: battle evaluation and feedback.
+- Phase 4 — Persistent Pokémon World: trainer profiles, persistent application state, NPC interactions, quests and exploration, memory.
+- Carried over from Phase 3: larger agent samples (or cheaper models) before ranking battle players; a richer mistake signal, e.g. comparison with lookahead play, so the feedback loop has something to learn; PP, status conditions, abilities and hidden opponent teams.
 - Carried over from Phase 2: repeated runs per cell in `compare` before ranking systems; `goal` constraints such as "Fire-only" are enforced only by the model; in `auto` mode, wrong type claims on teams without vulnerabilities are not fact-checked; the Strands spike (re-implement the Supervisor and compare with `pokeverse compare`).
 
 ## Running Locally
@@ -142,6 +149,8 @@ uv run pokeverse battle --side1 garchomp --side1 pikachu --side2 tyranitar --sid
 uv run pokeverse battle --side1 garchomp --side2 garchomp --player2 random --runs 100
 uv run pokeverse battle --side1 garchomp --side1 pikachu --side1 charizard --side2 tyranitar --side2 gyarados --side2 snorlax --player1 agent --seed 1
 uv run pokeverse scout --side1 garchomp --side1 pikachu --side1 charizard --side2 tyranitar --side2 gyarados --side2 snorlax
+uv run pokeverse battle-eval --system greedy --seeds 50
+uv run pokeverse battle-feedback --scenario bulk --train 5 --test 5
 uv run pokeverse ask "What type is Pikachu?" --usage   # needs OPENAI_API_KEY in .env or the environment
 uv run pokeverse ask "What type is Pikachu?" --no-tools --usage   # model answers from memory only
 uv run pokeverse ask "What type is Pikachu?" --json              # validated structured answer

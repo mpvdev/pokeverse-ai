@@ -183,11 +183,13 @@ class BattleStrategyAgent:
         chat: ChatModel,
         *,
         analysis: OpponentAnalysis | None = None,
+        lessons: str = "",
         temperature: float | None = None,
         max_tokens: int = STRATEGY_MAX_TOKENS,
     ) -> None:
         self._chat = chat
         self._analysis = analysis
+        self._lessons = lessons
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._fallback = GreedyPlayer()
@@ -212,8 +214,9 @@ class BattleStrategyAgent:
         try:
             prompt = describe_situation(state, side, options)
             briefing = self._analysis.briefing(state, side) if self._analysis else ""
-            if briefing:
-                prompt = f"{prompt}\n\n{briefing}"
+            for extra in (briefing, self._lessons):
+                if extra:
+                    prompt = f"{prompt}\n\n{extra}"
             completion = self._chat.complete(
                 prompt,
                 system=BATTLE_STRATEGY_SYSTEM_PROMPT,

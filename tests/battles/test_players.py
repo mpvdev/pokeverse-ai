@@ -65,6 +65,14 @@ def test_greedy_switches_when_no_move_can_hurt() -> None:
     assert greedy(start_battle([EARTHQUAKE_ONLY, PIKACHU], [CHARIZARD])) == Switch(1)
 
 
+def test_greedy_prefers_the_sure_knockout_over_a_stronger_move_that_can_miss() -> None:
+    shaky = replace(EARTHQUAKE, name="shaky-quake", power=150, accuracy=90)
+    species = replace(GARCHOMP_SPECIES, learnset=LEARNSET | {"shaky-quake"})
+    state = start_battle([Battler(species, (shaky, EARTHQUAKE))], [PIKACHU])
+
+    assert greedy(state) == UseMove(1)
+
+
 def test_greedy_replaces_a_fainted_battler_with_the_best_attacker() -> None:
     state = start_battle([EARTHQUAKE_ONLY, CHARIZARD, PIKACHU], [CHARIZARD])
     fainted = replace(state.sides[0].current, hp=0)

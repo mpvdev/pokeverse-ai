@@ -3,7 +3,7 @@
 import json
 import os
 import random
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from importlib.metadata import version
@@ -53,6 +53,15 @@ from pokeverse.catalog import (
 from pokeverse.catalog.pokeapi import PokeApiClient
 from pokeverse.catalog.type_chart import effectiveness
 from pokeverse.evals import RESEARCH_CASES, EvalResult, run_case
+from pokeverse.evals.battles import (
+    BATTLE_SCENARIOS,
+    BATTLE_SYSTEMS,
+    LLM_SYSTEMS,
+    BattleScenario,
+    SystemReport,
+    feedback_experiment,
+    run_system,
+)
 from pokeverse.evals.compare import COMPARE_CASES, SYSTEMS
 from pokeverse.evals.compare import run_case as compare_case
 from pokeverse.llm import (
@@ -591,6 +600,155 @@ def scout_command(
         typer.echo(result.briefing())
     if show_usage:
         print_usage(result.completion)
+
+
+def select_scenarios(ids: list[str] | None) -> tuple[BattleScenario, ...]:
+    if not ids:
+        return BATTLE_SCENARIOS
+    known = {scenario.id: scenario for scenario in BATTLE_SCENARIOS}
+    unknown = [scenario_id for scenario_id in ids if scenario_id not in known]
+    if unknown:
+        raise ValueError(f"unknown scenario(s) {unknown}; known: {sorted(known)}")
+    return tuple(known[scenario_id] for scenario_id in ids)
+
+
+def load_scenario(
+    catalog: PokemonCatalog, scenario: BattleScenario
+) -> tuple[list[Battler], list[Battler]]:
+    return (
+        [resolve_battler(catalog, name, []) for name in scenario.side1],
+        [resolve_battler(catalog, name, []) for name in scenario.side2],
+    )
+
+
+def report_line(report: SystemReport) -> str:
+    low, high = report.interval
+    return (
+        f"  {report.system:<15} {report.wins:>2}/{report.battles:<3} "
+        f"{report.win_rate:>4.0%} ({low:.0%}-{high:.0%})  "
+        f"turns {report.average_turns:4.1f}  mistakes/battle {report.mistakes_per_battle:4.2f}  "
+        f"tokens/battle {report.tokens_per_battle:7.0f}  fallbacks {report.fallbacks}"
+    )
+
+
+def progress_to_stderr(prefix: str) -> Callable[[str], None]:
+    return lambda message: typer.echo(f"[{prefix}] {message}", err=True)
+
+
+@app.command("battle-eval")
+def battle_eval_command(
+    ctx: typer.Context,
+    scenario_ids: Annotated[
+        list[str] | None, typer.Option("--scenario", help="Scenario id (repeatable).")
+    ] = None,
+    systems: Annotated[
+        list[str] | None,
+        typer.Option("--system", help=f"Side 1 player (repeatable): {', '.join(BATTLE_SYSTEMS)}."),
+    ] = None,
+    seeds: Annotated[int, typer.Option("--seeds", min=1, help="Battles per system.")] = 5,
+    seed_start: Annotated[int, typer.Option("--seed-start", help="First seed.")] = 0,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Win rate (95% CI), mistakes and tokens of each system against greedy; LLM systems cost."""
+    settings: Settings = ctx.obj
+    chosen = tuple(systems or BATTLE_SYSTEMS)
+    battle_seeds = range(seed_start, seed_start + seeds)
+    reports: dict[str, list[SystemReport]] = {}
+    try:
+        with llm_errors():
+            unknown = [system for system in chosen if system not in BATTLE_SYSTEMS]
+            if unknown:
+                raise ValueError(f"unknown system(s) {unknown}; known: {list(BATTLE_SYSTEMS)}")
+            scenarios = select_scenarios(scenario_ids)
+            needs_llm = any(system in LLM_SYSTEMS for system in chosen)
+            chat = OpenAIChat(LlmSettings.from_env()) if needs_llm else None
+            for scenario in scenarios:
+                with open_catalog(settings, offline=offline) as catalog:
+                    team, opponent = load_scenario(catalog, scenario)
+                reports[scenario.id] = [
+                    run_system(
+                        system,
+                        team,
+                        opponent,
+                        battle_seeds,
+                        chat,
+                        progress=progress_to_stderr(scenario.id),
+                    )
+                    for system in chosen
+                ]
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+
+    if as_json:
+        payload = {
+            scenario_id: [report.to_dict() for report in scenario_reports]
+            for scenario_id, scenario_reports in reports.items()
+        }
+        typer.echo(json.dumps({"seeds": list(battle_seeds), "scenarios": payload}))
+        return
+    for scenario in scenarios:
+        typer.echo(
+            f"Scenario {scenario.id}: {', '.join(scenario.side1)} vs "
+            f"{', '.join(scenario.side2)} (side 2: greedy). {scenario.description}"
+        )
+        for report in reports[scenario.id]:
+            typer.echo(report_line(report))
+
+
+@app.command("battle-feedback")
+def battle_feedback_command(
+    ctx: typer.Context,
+    scenario_id: Annotated[str, typer.Option("--scenario", help="Scenario id.")] = "bulk",
+    train: Annotated[int, typer.Option("--train", min=1, help="Training battles.")] = 5,
+    test: Annotated[int, typer.Option("--test", min=1, help="Test battles per system.")] = 5,
+    seed_start: Annotated[int, typer.Option("--seed-start", help="First seed.")] = 0,
+    as_json: Annotated[bool, typer.Option("--json", help="Print JSON.")] = False,
+    offline: Annotated[
+        bool, typer.Option("--offline", help="Only use the local catalog; never call PokéAPI.")
+    ] = False,
+) -> None:
+    """Learn lessons from the agent's mistakes on training seeds; measure them on new seeds."""
+    settings: Settings = ctx.obj
+    train_seeds = range(seed_start, seed_start + train)
+    test_seeds = range(seed_start + train, seed_start + train + test)
+    try:
+        with llm_errors():
+            (scenario,) = select_scenarios([scenario_id])
+            chat = OpenAIChat(LlmSettings.from_env())
+            with open_catalog(settings, offline=offline) as catalog:
+                team, opponent = load_scenario(catalog, scenario)
+            report = feedback_experiment(
+                team,
+                opponent,
+                chat,
+                train_seeds,
+                test_seeds,
+                progress=progress_to_stderr(scenario.id),
+            )
+    except (PokemonNotInCatalogError, MoveNotInCatalogError) as error:
+        raise fail(str(error), EXIT_NOT_FOUND) from error
+
+    if as_json:
+        typer.echo(json.dumps(report.to_dict()))
+        return
+    typer.echo(f"Training (seeds {train_seeds.start}-{train_seeds.stop - 1}):")
+    typer.echo(report_line(report.training))
+    for mistake in report.training.mistakes:
+        typer.echo(f"    [{mistake.kind}] {mistake.describe()}")
+    if not report.review.lessons:
+        typer.echo("No lessons: no mistakes were detected, so the test battles were skipped.")
+        return
+    typer.echo(f"Lessons ({report.review_tokens} tokens):")
+    for lesson in report.review.lessons:
+        typer.echo(f"  - {lesson.text} (evidence: {', '.join(lesson.evidence)})")
+    typer.echo(f"Test (seeds {test_seeds.start}-{test_seeds.stop - 1}):")
+    if report.baseline:
+        typer.echo(report_line(report.baseline))
+    if report.with_lessons:
+        typer.echo(report_line(report.with_lessons))
 
 
 @app.command("team")

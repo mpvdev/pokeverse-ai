@@ -19,6 +19,7 @@ from pokeverse.cli import (
     app,
     default_db_path,
 )
+from pokeverse.evals.battles import BattleScenario
 
 FIXTURES = Path(__file__).parent / "catalog" / "fixtures" / "pokeapi"
 PIKACHU_FIXTURE = (FIXTURES / "pikachu.json").read_text()
@@ -619,6 +620,61 @@ def test_battle_agent_auth_errors_exit_with_auth_code(fake_chat: type[FakeChat])
     result = runner.invoke(app, AGENT_BATTLE)
 
     assert result.exit_code == EXIT_AUTH
+
+
+MIRROR = BattleScenario("mirror", ("pikachu",), ("pikachu",), "Pikachu mirror.")
+
+
+@pytest.fixture
+def mirror_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "BATTLE_SCENARIOS", (MIRROR,))
+
+
+def decision_or_review(schema: Any) -> dict[str, Any]:
+    properties = schema.schema["properties"]
+    if schema.name == "battle_review":
+        ids = properties["lessons"]["items"]["properties"]["evidence"]["items"]["enum"]
+        return {"lessons": [{"text": "Lead with damage.", "evidence": ids[:1]}]}
+    return {"action": properties["action"]["enum"][-1], "reason": "Last option."}
+
+
+def test_battle_eval_reports_win_rate_with_interval(
+    db: str, upstream: Upstream, mirror_scenario: None
+) -> None:
+    result = invoke(db, "battle-eval", "--system", "greedy", "--seeds", "4")
+
+    assert result.exit_code == 0, result.stderr
+    lines = result.stdout.splitlines()
+    assert lines[0].startswith("Scenario mirror: pikachu vs pikachu (side 2: greedy).")
+    assert lines[1].startswith("  greedy")
+    assert "/4" in lines[1] and "tokens/battle       0" in lines[1]
+    assert result.stderr.count("[mirror] greedy seed") == 4
+
+
+def test_battle_eval_json_and_validation(
+    db: str, upstream: Upstream, mirror_scenario: None
+) -> None:
+    report = json.loads(
+        invoke(db, "battle-eval", "--system", "greedy", "--seeds", "2", "--json").stdout
+    )
+    assert report["seeds"] == [0, 1]
+    assert report["scenarios"]["mirror"][0]["battles"] == 2
+
+    assert invoke(db, "battle-eval", "--system", "genius").exit_code == EXIT_INVALID_INPUT
+    assert invoke(db, "battle-eval", "--scenario", "nope").exit_code == EXIT_INVALID_INPUT
+
+
+def test_battle_feedback_skips_testing_when_there_is_nothing_to_learn(
+    fake_chat: type[FakeChat], mirror_scenario: None
+) -> None:
+    fake_chat.data = decision_or_review
+
+    result = runner.invoke(app, ["battle-feedback", "--scenario", "mirror", "--train", "2"])
+
+    assert result.exit_code == 0, result.stderr
+    assert "Training (seeds 0-1):" in result.stdout
+    assert "No lessons: no mistakes were detected" in result.stdout
+    assert "Test (seeds" not in result.stdout
 
 
 def test_ask_prints_answer(fake_chat: type[FakeChat]) -> None:

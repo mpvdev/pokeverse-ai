@@ -2,7 +2,7 @@
 
 import random
 
-from pokeverse.battles.damage import expected_damage
+from pokeverse.battles.damage import damage_range
 from pokeverse.battles.engine import Action, BattleState, Combatant, Switch, UseMove
 
 
@@ -38,8 +38,8 @@ class GreedyPlayer:
     @staticmethod
     def _value(attacker: Combatant, foe: Combatant, index: int) -> float:
         move = attacker.battler.moves[index]
-        damage = expected_damage(attacker.battler.pokemon, foe.battler.pokemon, move)
-        return min(damage, foe.hp)
+        low, high = damage_range(attacker.battler.pokemon, foe.battler.pokemon, move)
+        return min((low + high) / 2, foe.hp) * (move.accuracy or 100) / 100
 
     def _move_key(self, attacker: Combatant, foe: Combatant, index: int) -> tuple[float, int]:
         return self._value(attacker, foe, index), attacker.battler.moves[index].priority
